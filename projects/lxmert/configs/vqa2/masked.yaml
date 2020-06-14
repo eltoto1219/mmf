@@ -1,34 +1,26 @@
 dataset_config:
-  visual_genome:
+  masked_vqa2:
     data_dir: ${env.data_dir}/datasets
     depth_first: false
     fast_read: false
     use_images: false
     use_features: true
     add_answer: true
-    use_image_feature_masks: false
     return_features_info: true
+    use_image_feature_masks: false
     max_features: 36
-    return_objects: false
-    return_scene_graph: false
-    return_relationships: false
-    use_ocr_info: false
     use_ocr: false
-    no_unk: false
+    use_ocr_info: false
     features:
       train:
-      - visual_genome/detectron_fix_100/fc6/,visual_genome/resnet152/
+      - coco/defaults/features/trainval2014.lmdb
       val:
-      - visual_genome/detectron_fix_100/fc6/,visual_genome/resnet152/
-      test:
-      - visual_genome/detectron_fix_100/fc6/,visual_genome/resnet152/
+      - coco/defaults/features/trainval2014.lmdb
     annotations:
       train:
-      - imdb/visual_genome/vg_question_answers.jsonl
+      - vqa2/defaults/annotations/imdb_train2014.npy
       val:
-      - imdb/visual_genome/vg_question_answers_placeholder.jsonl
-      test:
-      - imdb/visual_genome/vg_question_answers_placeholder.jsonl
+      - vqa2/defaults/annotations/imdb_val2014.npy
     processors:
       bbox_processor:
         type: bbox
@@ -43,12 +35,12 @@ dataset_config:
               do_lower_case: true
           max_seq_length: 20
       attribute_processor:
-        type: vocab
-        params:
-          max_length: 1
-          vocab:
-            type: random
-            vocab_file: vocabs/vocabulary_100k.txt
+          type: vocab
+          params:
+            max_length: 1
+            vocab:
+              type: random
+              vocab_file: vocabs/vocabulary_100k.txt
       name_processor:
         type: vocab
         params:
@@ -56,14 +48,11 @@ dataset_config:
           vocab:
             type: random
             vocab_file: vocabs/vocabulary_100k.txt
-      vg_answer_preprocessor:
-        type: simple_word
-        params: {}
       answer_processor:
-        type: vqa_answer
-        params:
-            num_answers: 1
-            vocab_file: vocabs/answers_vqa.txt
+          type: vqa_answer
+          params:
+            num_answers: 10
+            vocab_file: vqa2/defaults/extras/vocabs/answers_vqa.txt
             preprocessor:
               type: simple_word
               params: {}

@@ -5,8 +5,12 @@ dataset_config:
     fast_read: false
     use_images: false
     use_features: true
-    zoo_requirements:
-    - gqa.defaults
+    add_answer: true
+    return_features_info: true
+    use_image_feature_masks: false
+    max_features: 36
+    use_ocr: false
+    use_ocr_info: false
     features:
       train:
       - gqa/defaults/features/gqa.lmdb
@@ -21,18 +25,34 @@ dataset_config:
       - gqa/defaults/annotations/val_balanced_questions.npy
       test:
       - gqa/defaults/annotations/test_balanced_questions.npy
-    max_features: 36
-    use_image_feature_masks: false
     processors:
-      masked_token_processor:
-        type: masked_token
+      bbox_processor:
+        type: bbox
         params:
-          tokenizer_config:
-            type: bert-base-uncased
-            params:
-              do_lower_case: true
-          mask_probability: 0.15
-          max_seq_length: 128
+          max_length: 36
+      text_processor:
+        type: bert_tokenizer
+        params:
+            tokenizer_config:
+              type: bert-base-uncased
+              params:
+                do_lower_case: true
+            mask_probability: 0.15
+            max_seq_length: 20
+      attribute_processor:
+        type: vocab
+        params:
+          max_length: 1
+          vocab:
+            type: random
+            vocab_file: vocabs/vocabulary_100k.txt
+      name_processor:
+        type: vocab
+        params:
+          max_length: 1
+          vocab:
+            type: random
+            vocab_file: vocabs/vocabulary_100k.txt
       answer_processor:
         type: vqa_answer
         params:
@@ -41,9 +61,33 @@ dataset_config:
           preprocessor:
             type: simple_word
             params: {}
+        masked_token_processor:
+          type: masked_token
+          params:
+            tokenizer_config:
+              type: bert-base-uncased
+              params:
+                do_lower_case: true
+            mask_probability: 0.15
+            max_seq_length: 20
 
-    return_features_info: false
-    # Return OCR information
-    use_ocr: false
-    # Return spatial information of OCR tokens if present
-    use_ocr_info: false
+model_config:
+  lxmert:
+    training_head_type: pretraining
+
+optimizer:
+  type: adam_w
+  params:
+    lr: 1e-4
+    eps: 1e-8
+
+tiraining:
+  seed: 9595
+  batch_size: 64
+  lr_scheduler: false
+  find_unused_parameters: true
+  use_warmup: true
+  warmup_factor: 0.05
+  warmup_iterations: 1000
+  max_epochs: 20
+  max_updates: null

@@ -1,5 +1,27 @@
 includes:
-- ../masked_vqa2/masked.yaml
+- ../vqa2/masked.yaml
 - ../visual_genome/masked.yaml
 - ../coco/masked.yaml
 - ../gqa/masked.yaml
+
+model_config:
+  lxmert:
+    training_head_type: pretraining
+
+optimizer:
+  type: adam_w
+  params:
+    lr: 1e-4
+    eps: 1e-8
+
+training:
+  seed: 9595
+  batch_size: 64
+  lr_scheduler: false
+  find_unused_parameters: true
+  use_warmup: true
+  warmup_factor: 0.05
+  warmup_iterations: 1000
+  max_epochs: 20
+  max_updates: null
+  pin_memory: false

@@ -24,6 +24,13 @@ To pretrain LXMERT model on the VQA2.0 dataset, run the following command
 mmf_run config=projects/lxmert/configs/masked_vqa2/pretrain.yaml run_type=train_val dataset=masked_vqa2 model=lxmert
 ```
 
+
+To pretrain LXMERT model on the VQA2.0, GQA, Visual Genome, and COCO datasets, run the following command
+
+```
+mmf_run config=projects/lxmert/configs/pretrain/pretrain.yaml run_type=train_val datasets=masked_vqa2,masked_gqa,masked_coco,visual_genome model=lxmert
+```
+
 ## Finetuning
 
 To finetune LXMERT model on the VQA2.0 dataset, run the following command
@@ -33,3 +40,4 @@ mmf_run config=projects/lxmert/configs/vqa2/defaults.yaml run_type=train_val dat
 ```
 
 Based on the config used and `training_head_type` defined in the config, the model can use either pretraining head or donwstream task specific heads(VQA).
+

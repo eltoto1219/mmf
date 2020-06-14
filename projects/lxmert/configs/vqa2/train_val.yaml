@@ -7,8 +7,13 @@ dataset_config:
     use_features: true
     features:
       train:
+<<<<<<< HEAD
       - coco/defaults/features/trainval2014.lmdb
       - coco/defaults/features/trainval2014.lmdb
+=======
+      - coco/defaults/features/coco_trainval2014.lmdb
+      - coco/defaults/features/coco_trainval2014.lmdb
+>>>>>>> Add files via upload
     annotations:
       train:
       - vqa2/defaults/annotations/imdb_train2014.npy

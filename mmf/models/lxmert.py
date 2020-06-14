@@ -1,4 +1,4 @@
-# Copyright 2019 project LXRT.
+# Copyright 2019 project LXMERT.
 # Copyright 2018 The Google AI Language Team Authors and The HuggingFace Inc. team.
 # Copyright (c) 2018, NVIDIA CORPORATION.  All rights reserved.
 # Copyright (c) Facebook, Inc. and its affiliates.
@@ -16,16 +16,9 @@
 # limitations under the License.
 
 import math
-import sys
 import os
-import shutil
-import tarfile
-import tempfile
-from copy import deepcopy
 import numpy as np
 import torch
-import torch.nn.functional as F
-import json
 from omegaconf import OmegaConf
 from torch import nn
 from torch.nn import CrossEntropyLoss, SmoothL1Loss
@@ -38,8 +31,6 @@ from transformers.modeling_bert import (
     BertOutput,  # removed custom lxmert class bc nothing was changed
     BertPredictionHeadTransform,
     BertPreTrainedModel,  # got rid of custom LXMERT class temporarily
-    BertSelfOutput,
-    load_tf_weights_in_bert
 )
 
 from mmf.common.registry import registry
@@ -48,90 +39,93 @@ from mmf.utils.configuration import get_mmf_cache_dir
 from mmf.utils.modeling import get_optimizer_parameters_for_bert
 
 
-# also unknown about how to implement, unicode variable, logger, etc ...
-# what to do about import tokenization exception
-# redfine BertEmbedding to explictly set padding idx
-# the forward reimplemntation for BertEmbedding: does not support input embedding
-# add visuzliztion opetion for bert attention
-# implement dynamic attention if needed
+"""
+ redfine BertEmbedding to explictly set padding idx
+ the forward reimplemntation for BertEmbedding: does not support input embedding
+ add visuzliztion opetion for bert attention
+ implement dynamic attention if needed
+
+ inputs that vilbert base model has that we do not
+ image_location,
+ co_attention_mask=None,
+ task_ids=None,
+ output_all_encoded_layers=False,
+ output_all_attention_masks=False,
+
+ task specific tokens? for vilbert base
+ what is .init_weights? for vilbert base
+
+ ADD TO LXMERT CONFIG TOO FOR PRETRAINING
+ task_mask_lm=config.task_mask_lm
+ task_matched=congig.task_matched
+ task_obj_predict=config_obj_predict
+ visual_losses=config.visual_losses
+ task_qa=config.task_qa
+ self.num_answers = config.num_answers
+ include mode in config
+ also need to implemented VisualConfig from Hao's repo into general config and then
+ subsequently modify sub LXMERT classes
+ changed all LXRT class names to LXMERT just for the sake of ubiquity
+
+ DONT KNOW WHAT THIS WOULD DO
+ if self.task_specific_tokens:
+    # extend the mask
+    mask_tokens = input_txt.new().resize_(input_txt.size(0), 1).fill_(1)
+    attention_mask = torch.cat([mask_tokens, attention_mask], dim=1)
+
+ for pretrianing
+ should we define the cross entropy class funciton in the init?
+ changed num answers to num labels
 
 
-# inputs that vilbert base model has that we do not
-# image_location,
-# co_attention_mask=None,
-# task_ids=None,
-# output_all_encoded_layers=False,
-# output_all_attention_masks=False,
-# task specific tokens? for vilbert base
-# what is .init_weights? for vilbert base
-# ADD TO LXRT CONFIG TOO FOR PRETRAINING
-# task_mask_lm=config.task_mask_lm
-# task_matched=congig.task_matched
-# task_obj_predict=config_obj_predict
-# task_cls=task_cls
-# visual_losses=config.visual_losses
-# task_qa=config.task_qa
-# self.num_answers = config.num_answers
-# DONT KNOW WHAT THIS WOULD DO
-# if self.task_specific_tokens:
-#    # extend the mask
-#    mask_tokens = input_txt.new().resize_(input_txt.size(0), 1).fill_(1)
-#    attention_mask = torch.cat([mask_tokens, attention_mask], dim=1)
-# for pretrianing
-# should we define the cross entropy class funciton in the init?
-# changed num answers to num labels
-# add attention weights to bert calssifier too
-#should we reshape logits for only vilbert or for lxert too?
-# include mode in config
+ KEEP THE FOLLOWING TO MAKE NEW CONFIG FILE
+ LXMERTBERTCONFIG
+     def __init__(
+         self,
+         vocab_size_or_config_json_file,
+         hidden_size=768,
+         num_hidden_layers=12,
+         num_attention_heads=12,
+         intermediate_size=3072,
+         hidden_act="gelu",
+         hidden_dropout_prob=0.1,
+         attention_probs_dropout_prob=0.1,
+         max_position_embeddings=512,
+         type_vocab_size=2,
+         initializer_range=0.02,
+         make sure we have config option for padding idx
+         config.pad_token_id
+         config.layer_norm_eps
+ what is fusion method?
+
+ class VisualConfig(object):
+     VISUAL_LOSSES = ["obj", "attr", "feat"]
+
+     def __init__(self, l_layers=12, x_layers=5, r_layers=0):
+         self.l_layers = l_layers
+         self.x_layers = x_layers
+         self.r_layers = r_layers
+
+         self.visual_feat_dim = 2048
+         self.visual_pos_dim = 4
+
+         self.obj_id_num = 1600
+         self.attr_id_num = 400
+
+         self.visual_losses = self.VISUAL_LOSSES
+         self.visual_loss_config = {
+             "obj": (self.obj_id_num, "ce", (-1,), 1 / 0.15),
+             "attr": (self.attr_id_num, "ce", (-1,), 1 / 0.15),
+             "feat": (2048, "l2", (-1, 2048), 1 / 0.15),
+         }
+
+     def set_visual_dims(self, feat_dim, pos_dim):
+         self.visual_feat_dim = feat_dim
+         self.visual_pos_dim = pos_dim
 
 
-# KEEP THE FOLLOWING TO MAKE NEW CONFIG FILE
-# LXMERTBERTCONFIG
-#     def __init__(
-#         self,
-#         vocab_size_or_config_json_file,
-#         hidden_size=768,
-#         num_hidden_layers=12,
-#         num_attention_heads=12,
-#         intermediate_size=3072,
-#         hidden_act="gelu",
-#         hidden_dropout_prob=0.1,
-#         attention_probs_dropout_prob=0.1,
-#         max_position_embeddings=512,
-#         type_vocab_size=2,
-#         initializer_range=0.02,
-#         make sure we have config option for padding idx
-#         config.pad_token_id
-#         config.layer_norm_eps
-# what is fusion method?
-
-# class VisualConfig(object):
-#     VISUAL_LOSSES = ["obj", "attr", "feat"]
-#
-#     def __init__(self, l_layers=12, x_layers=5, r_layers=0):
-#         self.l_layers = l_layers
-#         self.x_layers = x_layers
-#         self.r_layers = r_layers
-#
-#         self.visual_feat_dim = 2048
-#         self.visual_pos_dim = 4
-#
-#         self.obj_id_num = 1600
-#         self.attr_id_num = 400
-#
-#         self.visual_losses = self.VISUAL_LOSSES
-#         self.visual_loss_config = {
-#             "obj": (self.obj_id_num, "ce", (-1,), 1 / 0.15),
-#             "attr": (self.attr_id_num, "ce", (-1,), 1 / 0.15),
-#             "feat": (2048, "l2", (-1, 2048), 1 / 0.15),
-#         }
-#
-#     def set_visual_dims(self, feat_dim, pos_dim):
-#         self.visual_feat_dim = feat_dim
-#         self.visual_pos_dim = pos_dim
-#
-#
-# VISUAL_CONFIG = VisualConfig()
+ VISUAL_CONFIG = VisualConfig()
+ """
 
 
 def gelu(x):
@@ -432,7 +426,7 @@ class BertPreTrainingHeads(nn.Module):
         return prediction_scores, seq_relationship_score
 
 
-class LXRTXLayer(nn.Module):
+class LXMERTXLayer(nn.Module):
     def __init__(self, config):
         super().__init__()
         # The cross-attention Layer
@@ -522,7 +516,7 @@ class VisualFeatEncoder(nn.Module):
         return output
 
 
-class LXRTEncoder(nn.Module):
+class LXMERTEncoder(nn.Module):
     def __init__(self, config):
         super().__init__()
 
@@ -534,7 +528,7 @@ class LXRTEncoder(nn.Module):
         self.num_x_layers = VISUAL_CONFIG.x_layers
         self.num_r_layers = VISUAL_CONFIG.r_layers
         print(
-            "LXRT encoder with %d l_layers, %d x_layers, and %d r_layers."
+            "LXMERT encoder with %d l_layers, %d x_layers, and %d r_layers."
             % (self.num_l_layers, self.num_x_layers, self.num_r_layers)
         )
 
@@ -544,7 +538,7 @@ class LXRTEncoder(nn.Module):
             [BertLayer(config) for _ in range(self.num_l_layers)]
         )
         self.x_layers = nn.ModuleList(
-            [LXRTXLayer(config) for _ in range(self.num_x_layers)]
+            [LXMERTXLayer(config) for _ in range(self.num_x_layers)]
         )
         self.r_layers = nn.ModuleList(
             [BertLayer(config) for _ in range(self.num_r_layers)]
@@ -575,14 +569,14 @@ class LXRTEncoder(nn.Module):
         return lang_feats, visn_feats
 
 
-class LXRTBase(BertPreTrainedModel):
-    """LXRT Model."""
+class LXMERTBase(BertPreTrainedModel):
+    """LXMERT Model."""
     # added visual feature mask
 
     def __init__(self, config):
         super().__init__(config)
         self.embeddings = BertEmbeddings(config)
-        self.encoder = LXRTEncoder(config)
+        self.encoder = LXMERTEncoder(config)
         self.pooler = BertPooler(config)
         self.apply(self.init_bert_weights)
         self.task_specific_tokens = config.task_specific_tokens
@@ -644,7 +638,7 @@ class LXRTBase(BertPreTrainedModel):
         # Positional Word Embeddings
         embedding_output = self.embeddings(input_ids, token_type_ids)
 
-        # Run LXRT backbone
+        # Run LXMERT backbone
         lang_feats, visn_feats = self.encoder(
             embedding_output,
             extended_attention_mask,
@@ -656,15 +650,15 @@ class LXRTBase(BertPreTrainedModel):
         return (lang_feats, visn_feats), pooled_output
 
 
-class LXRTForPretraining(BertPreTrainedModel):
+class LXMERTForPretraining(BertPreTrainedModel):
     def __init__(self, config):
         super().__init__(config)
 
         # Configuration
         self.config = config
         self.num_labels = config.num_labels
-        # LXRT backbone
-        self.bert = LXRTBase.from_pretrained(
+        # LXMERT backbone
+        self.bert = LXMERTBase.from_pretrained(
             self.config.bert_model_name,
             config=BertConfig.from_dict(
                 OmegaConf.to_container(self.config, resolve=True)
@@ -807,13 +801,13 @@ class LXRTForPretraining(BertPreTrainedModel):
         return output
 
 
-class LXRTForClassification(nn.Module):
+class LXMERTForClassification(nn.Module):
     def __init__(self, config, mode="lxr"):
         super().__init__(config)
 
         self.config = config
         self.mode = config.mode
-        self.bert = LXRTBase.from_pretrained(
+        self.bert = LXMERTBase.from_pretrained(
             self.config.bert_model_name,
             config=BertConfig.from_dict(
                 OmegaConf.to_container(self.config, resolve=True)
@@ -871,12 +865,12 @@ class LXRTForClassification(nn.Module):
         return {"scores": reshaped_logits}
 
     def save(self, path):
-        torch.save(self.model.state_dict(), os.path.join("%s_LXRT.pth" % path))
+        torch.save(self.model.state_dict(), os.path.join("%s_LXMERT.pth" % path))
 
     def load(self, path):
         # Load state_dict from snapshot file
         print("Load LXMERT pre-trained model from %s" % path)
-        state_dict = torch.load("%s_LXRT.pth" % path)
+        state_dict = torch.load("%s_LXMERT.pth" % path)
         new_state_dict = {}
         for key, value in state_dict.items():
             if key.startswith("module."):
@@ -922,9 +916,9 @@ class LXMERT(BaseModel):
 
     def build(self):
         if self.config.training_head_type == "pretraining":
-            self.model = LXRTForPretraining(self.config)
+            self.model = LXMERTForPretraining(self.config)
         else:
-            self.model = LXRTForClassification(self.config)
+            self.model = LXMERTForClassification(self.config)
 
         if getattr(self.config, "freeze_base", False):
             for p in self.model.bert.parameters():

@@ -61,4 +61,3 @@ model_config:
     in_batch_pairs: false
     visualization: false # need to implement
     model: "bert"
-

@@ -17,7 +17,7 @@ class MaskedVQA2Dataset(VQA2Dataset):
         self._add_answer = config.get("add_answer", True)
 
     def load_item(self, idx):
-        sample_info = self.imdb[idx]
+        sample_info = self.annotation_db[idx]
         current_sample = Sample()
 
         if self._use_features is True:
@@ -42,7 +42,8 @@ class MaskedVQA2Dataset(VQA2Dataset):
                 item["image_labels"] = image_labels
             current_sample.update(item)
         current_sample = self._add_masked_question(sample_info, current_sample)
-
+        if self._add_answer:
+            current_sample = self.add_answer_info(sample_info, current_sample)
         return current_sample
 
     def _add_masked_question(self, sample_info, current_sample):

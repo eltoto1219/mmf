@@ -1,37 +1,9 @@
 model_config:
   lxmert:
-<<<<<<< HEAD
     training_head_type: classification
     num_labels: 3129
     losses:
     - type: logit_bce
-
-=======
-    bert_model_name: bert-base-uncased
-    random_initialize: false
-    training_head_type: classification
-    l_layers: 9
-    x_layers: 5
-    r_layers: 5
-    num_labels: 3129
-    mode: 'lxr'
-    visual_feat_dim: 2048
-    visual_pos_dim: 4
-    obj_id_num: 1600
-    attr_id_num: 400
-    hidden_dim: 768
-    taskMatched: true
-    taskMaskLM: true
-    taskObjPredict: true
-    taskQA: true
-    visual_losses: ["obj", "attr", "feat"]
-    visual_losses_config: {
-         "obj": [obj_id_num, "ce", (-1,), 1 / 0.15],
-         "attr": [attr_id_num, "ce", (-1,), 1 / 0.15],
-         "feat": [2048, "l2", (-1, 2048), 1 / 0.15],
-     }
-    
->>>>>>> Add files via upload
 
 dataset_config:
   vqa2:
@@ -45,11 +17,7 @@ dataset_config:
             params:
               do_lower_case: true
           mask_probability: 0
-<<<<<<< HEAD
-          max_seq_length: 128
-=======
           max_seq_length: 20
->>>>>>> Add files via upload
 
 optimizer:
   type: adam_w
@@ -68,11 +36,7 @@ evaluation:
   - vqa_accuracy
 
 training:
-<<<<<<< HEAD
   batch_size: 16
-=======
-  batch_size: 256
->>>>>>> Add files via upload
   lr_scheduler: true
   # Don't forget to update schedule_attributes if you update this
   max_updates: 60000

@@ -8,11 +8,16 @@ dataset_config:
     features:
       train:
 <<<<<<< HEAD
+<<<<<<< HEAD
       - coco/defaults/features/trainval2014.lmdb
       - coco/defaults/features/trainval2014.lmdb
 =======
       - coco/defaults/features/coco_trainval2014.lmdb
       - coco/defaults/features/coco_trainval2014.lmdb
+>>>>>>> Add files via upload
+=======
+      - coco/defaults/features/trainval2014.lmdb
+      - coco/defaults/features/trainval2014.lmdb
 >>>>>>> Add files via upload
     annotations:
       train:

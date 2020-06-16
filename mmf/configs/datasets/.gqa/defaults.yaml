@@ -1,5 +1,5 @@
 dataset_config:
-  vqa2:
+  gqa:
       data_dir: ${env.data_dir}/datasets
       depth_first: false
       fast_read: false
@@ -7,46 +7,39 @@ dataset_config:
       use_features: true
       zoo_requirements:
       - coco.defaults
-      - vqa2.defaults
-      images:
-        train:
-        - coco/defaults/images/train2014
-        val:
-        - coco/defaults/images/val2014
-        test:
-        - coco/defaults/images/test2015
+      - gqa.defaults
       features:
         train:
-        - coco/defaults/features/trainval2014.lmdb
+        - visual_genome/detectron_fix_100/fc6/
         val:
-        - coco/defaults/features/trainval2014.lmdb
+        - visual_genome/detectron_fix_100/fc6/
         test:
         - coco/defaults/features/test2015.lmdb
       annotations:
         train:
-        - vqa2/defaults/annotations/imdb_train2014.npy
+        - gqa/defaults/annotations/imdb_train2014.npy
         val:
-        - vqa2/defaults/annotations/imdb_val2014.npy
+        - vgqa/defaults/annotations/imdb_val2014.npy
         test:
-        - vqa2/defaults/annotations/imdb_test2015.npy
+        - gqa/defaults/annotations/imdb_test2015.npy
       max_features: 100
       processors:
         text_processor:
           type: vocab
           params:
-            max_length: 14
+            max_length: 20
             vocab:
               type: intersected
               embedding_name: glove.6B.300d
-              vocab_file: vqa2/defaults/extras/vocabs/vocabulary_100k.txt
+              vocab_file: gqa/defaults/extras/vocabs/vocabulary_100k.txt
             preprocessor:
               type: simple_sentence
               params: {}
         answer_processor:
-          type: vqa_answer
+          type: gqa_answer
           params:
             num_answers: 10
-            vocab_file: vqa2/defaults/extras/vocabs/answers_vqa.txt
+            vocab_file: gqa/defaults/extras/vocabs/answers_gqa.txt
             preprocessor:
               type: simple_word
               params: {}

@@ -70,7 +70,7 @@ class BertEmbeddings(nn.Module):
 
     def __init__(self, config):
         super(BertEmbeddings, self).__init__()
-#         print(config.hidden_size)
+#         print(config.hidden_dim)
         self.word_embeddings = nn.Embedding(
             config.vocab_size, config.hidden_size,
         )
@@ -298,16 +298,7 @@ class BertVisualObjHead(nn.Module):
         super().__init__()
         self.transform = BertPredictionHeadTransform(config)
 
-<<<<<<< HEAD
         self.visual_losses = config.visual_losses
-=======
-        # Decide the use of visual losses
-#         visual_losses = visual_losses.split(",")
-        for loss in visual_losses:
-            assert loss in config.visual_losses
-        self.visual_losses = visual_losses
-
->>>>>>> added all untestest config options and stadnardized all input/output to lxmert to match MMF style
         # The output weights are the same as the input embeddings, but there is
         # an output-only bias for each token.
         self.decoder_dict = nn.ModuleDict(
@@ -481,10 +472,7 @@ class LXMERTEncoder(nn.Module):
 
 class LXMERTBase(BertPreTrainedModel):
     """LXMERT Model."""
-<<<<<<< HEAD
-=======
 
->>>>>>> added all untestest config options and stadnardized all input/output to lxmert to match MMF style
     def __init__(self, config):
         super().__init__(config)
         self.embeddings = BertEmbeddings(config)
@@ -501,11 +489,7 @@ class LXMERTBase(BertPreTrainedModel):
         visual_loc=None,
         visual_attention_mask=None,
         output_all_attention_masks=False,
-<<<<<<< HEAD
         output_all_encoded_layers=False,
-=======
-        output_all_encoded_layers=False
->>>>>>> added all untestest config options and stadnardized all input/output to lxmert to match MMF style
     ):
 
         if output_all_encoded_layers:
@@ -514,10 +498,7 @@ class LXMERTBase(BertPreTrainedModel):
             raise NotImplementedError
 
         visual_feats = (visual_feats, visual_loc)
-<<<<<<< HEAD
 
-=======
->>>>>>> added all untestest config options and stadnardized all input/output to lxmert to match MMF style
         if attention_mask is None:
             attention_mask = torch.ones_like(input_ids)
         if token_type_ids is None:
@@ -591,11 +572,7 @@ class LXMERTForPretraining(nn.Module):
         self.task_matched = config.task_matched
         self.task_qa = config.task_qa
         self.visual_losses = config.visual_losses
-<<<<<<< HEAD
         self.visual_loss_config = config.visual_loss_config
-=======
-        self.visual_losses_config = config.visual_losses_config
->>>>>>> added all untestest config options and stadnardized all input/output to lxmert to match MMF style
 
         # Pre-training heads
         self.cls = BertPreTrainingHeads(
@@ -637,10 +614,7 @@ class LXMERTForPretraining(nn.Module):
         visual_pos=None,
         visual_attention_mask=None,
         masked_lm_labels=None,
-<<<<<<< HEAD
         masked_image_labels=None,
-=======
->>>>>>> added all untestest config options and stadnardized all input/output to lxmert to match MMF style
         obj_labels=None,
         matched_label=None,  # next_sent_label in VilBERT
         ans=None,
@@ -667,19 +641,7 @@ class LXMERTForPretraining(nn.Module):
         output = {}
         if output_all_attention_masks:
             raise NotImplementedError
-<<<<<<< HEAD
-=======
 
-        if self.task_qa:
-            answer_score = self.answer_head(pooled_output)
-        else:
-            answer_score = pooled_output[0][0]
-
-        total_loss = 0.0
-        loss_fct = CrossEntropyLoss(ignore_index=-1)
->>>>>>> added all untestest config options and stadnardized all input/output to lxmert to match MMF style
-
-        # Calculate losses
         if masked_lm_labels is not None and self.task_mask_lm:
             masked_lm_loss = self.loss_fct(
                 lang_prediction_scores.view(-1, lang_prediction_scores.size(-1)),
@@ -696,7 +658,6 @@ class LXMERTForPretraining(nn.Module):
             total_visn_loss = 0.0
             visn_prediction_scores_dict = self.obj_predict_head(visn_output)
             for key in self.visual_losses:
-<<<<<<< HEAD
                 if key=='obj':
                     temp_obj_labels_dict = obj_labels.max(-1)
                     labels = temp_obj_labels_dict.indices
@@ -706,20 +667,14 @@ class LXMERTForPretraining(nn.Module):
                     labels = visual_feats
                     mask_conf = (masked_image_labels == 1).float()
                     visn_loss_fct = self.l1
-=======
                 label, mask_conf = obj_labels[key]
->>>>>>> added all untestest config options and stadnardized all input/output to lxmert to match MMF style
                 (
                     output_dim,
                     loss_fct_name,
                     label_shape,
                     weight,
                 ) = self.visual_loss_config[key]
-<<<<<<< HEAD
-
-=======
                 visn_loss_fct = loss_fcts[loss_fct_name]
->>>>>>> added all untestest config options and stadnardized all input/output to lxmert to match MMF style
                 visn_prediction_scores = visn_prediction_scores_dict[key]
                 visn_loss = visn_loss_fct(
                     visn_prediction_scores.view(-1, output_dim),
@@ -729,23 +684,15 @@ class LXMERTForPretraining(nn.Module):
                     visn_loss = visn_loss.mean(1)
                 visn_loss = (visn_loss * mask_conf.view(-1)).mean() * weight
                 total_visn_loss += visn_loss
+                output["{}_loss".format(key)] = visn_loss
             output["visn_loss"] = total_visn_loss
 
         if ans is not None and self.task_qa:
             answer_score = self.answer_head(pooled_output)
             answer_loss = self.loss_fct(
                 answer_score.view(-1, self.config.num_labels), ans.argmax(-1)
-            )
-<<<<<<< HEAD
-
             output["answer_loss"] = answer_loss
 
-=======
-            total_loss += answer_loss
-            output["answer_loss"] = answer_loss.detach()
-        output["anwer_score"] = answer_score.detach()
-        output["total_loss"] = total_loss
->>>>>>> added all untestest config options and stadnardized all input/output to lxmert to match MMF style
         return output
 
 
@@ -789,13 +736,8 @@ class LXMERTForClassification(nn.Module):
         visual_pos=None,
         visual_attention_mask=None,
         masked_lm_labels=None,
-<<<<<<< HEAD
         obj_labels=None,
         matched_label=None,
-=======
-        obj_labels=None,  # is img_labels in vilbert
-        matched_label=None,  # next_sent_label in VilBERT
->>>>>>> added all untestest config options and stadnardized all input/output to lxmert to match MMF style
         ans=None,
         output_all_attention_masks=False,
         output_all_encoded_layers=False
@@ -812,29 +754,19 @@ class LXMERTForClassification(nn.Module):
             output_all_attention_masks
         )
 
-<<<<<<< HEAD
         output = {}
-=======
->>>>>>> added all untestest config options and stadnardized all input/output to lxmert to match MMF style
+
         if output_all_attention_masks:
             raise NotImplementedError
 
         if self.config.training_head_type == "nlvr2":
             pooled_output = pooled_output.view(-1, pooled_output.size(1) * 2)
 
-<<<<<<< HEAD
         logits = self.classifier(pooled_output)
         reshaped_logits = logits.contiguous().view(-1, self.config.num_labels)
         output["scores"] = reshaped_logits
 
         return output
-=======
-        logits = self.logit_fc(pooled_output)
-        reshaped_logits = logits.contiguous().view(-1, self.num_labels)
-
-        return {"scores": reshaped_logits}
-
->>>>>>> added all untestest config options and stadnardized all input/output to lxmert to match MMF style
 
 @registry.register_model("lxmert")
 class LXMERT(BaseModel):
@@ -865,24 +797,16 @@ class LXMERT(BaseModel):
                 p.requires_grad = False
 
     def get_image_and_text_features(self, sample_list):
-        # i added back some original code from VilBERT, not sure how much you changed
-        # I only did so to keep  everything compatabile for the downstream forward
-        # pass defined below
-        # if we run into troubles for nlvr2, we can add back the other stuff
-        # IMPORTANT: if we end up looking for answer to question, it may be in
-        # the sample list
         bert_input_ids = sample_list.input_ids
         bert_input_mask = sample_list.input_mask
         bert_input_type_ids = sample_list.segment_ids
         masked_lm_labels = sample_list.lm_label_ids
 
-        ####
         image_info = getattr(sample_list, "image_info_0", {})
         image_dim_variable = getattr(image_info, "max_features", None)
+
         image_feature_variable = getattr(sample_list, "image_feature_0", None)
         image_label_variable = getattr(sample_list, "image_labels", None)
-<<<<<<< HEAD
-
 
         bbox = getattr(image_info, "bbox", None)
         if bbox is not None:
@@ -927,52 +851,6 @@ class LXMERT(BaseModel):
                 is_correct = is_correct.cuda()
             else:
                 is_correct = torch.tensor(is_correct).cuda()
-=======
-        if image_label_variable is not None:
-            image_label_variable = torch.tensor(
-                image_label_variable, dtype=torch.long
-            ).cuda()
-
-        # may want to check shape of bbox here -> may be source of error later
-        bbox = np.array(getattr(image_info, "bbox", None), dtype=np.float32)
-        image_w = np.array(
-            getattr(image_info, "image_width", None), dtype=np.float32
-        )
-        image_h = np.array(
-            getattr(image_info, "image_height", None), dtype=np.float32
-        )
-        image_location = np.zeros(
-            (bbox.shape[0], bbox.shape[1], 5), dtype=np.float32
-        )
-        image_location[:, :, :4] = bbox
-        image_location[:, :, 4] = (
-            (image_location[:, :, 3] - image_location[:, :, 1])
-            * (image_location[:, :, 2] - image_location[:, :, 0])
-            / (image_w * image_h)[:, None]
-        )
-        image_location[:, :, 0] = image_location[:, :, 0] / image_w[:, None]
-        image_location[:, :, 1] = image_location[:, :, 1] / image_h[:, None]
-        image_location[:, :, 2] = image_location[:, :, 2] / image_w[:, None]
-        image_location[:, :, 3] = image_location[:, :, 3] / image_h[:, None]
-        image_location_variable = torch.tensor(
-            image_location, dtype=torch.float
-        ).cuda()
-
-        # idk what this is but could be useful
-        # cls_prob = getattr(image_info, "cls_prob", None)
-        # image_target = np.array(cls_prob, dtype=np.float32)
-        # image_target_variable = torch.tensor(image_target, dtype=torch.float).cuda()
-
-        is_matched = 1
-        if self.config.task_matched:
-            if random.random() < 0.5:
-                is_matched = 0
-                ssf = torch.randperm(bert_input_ids.size(0))
-                bert_input_ids = bert_input_ids[ssf]
-                bert_input_mask = bert_input_mask[ssf]
-                bert_input_type_ids = bert_input_type_ids[ssf]
-                masked_lm_labels = masked_lm_labels[ssf]
->>>>>>> added all untestest config options and stadnardized all input/output to lxmert to match MMF style
 
         return {
             "input_ids": bert_input_ids,
@@ -981,18 +859,11 @@ class LXMERT(BaseModel):
             "masked_lm_labels": masked_lm_labels,
             "visual_feats": image_feature_variable,
             "pos": image_location_variable,
-<<<<<<< HEAD
             "masked_image_labels": image_label_variable,
             "obj_labels": cls_prob,
             "matched_label": is_correct,
             "ans": answers,
             "image_dim": max_features
-=======
-            "obj_labels": image_label_variable,
-            "matched_label": is_matched,
-            "ans": None,
-            "image_dim": image_dim_variable
->>>>>>> added all untestest config options and stadnardized all input/output to lxmert to match MMF style
         }
 
     def get_optimizer_parameters(self, config):
@@ -1000,19 +871,10 @@ class LXMERT(BaseModel):
 
     def forward(self, sample_list):
         params = self.get_image_and_text_features(sample_list)
-<<<<<<< HEAD
         if params["visual_feats"] is not None and params["image_dim"] is not None:
             image_mask = torch.arange(params["visual_feats"].size(-2))\
                 .expand(*params["visual_feats"].size()[:-1])\
-=======
-
-        if params["image_feature"] is not None and params["image_dim"] is not None:
-            image_mask = (
-                torch.arange(params["image_feature"].size(-2))
-                .expand(*params["image_feature"].size()[:-1])
->>>>>>> added all untestest config options and stadnardized all input/output to lxmert to match MMF style
                 .cuda()
-
             if len(params["image_dim"].size()) < len(image_mask.size()):
                 params["image_dim"] = params["image_dim"].unsqueeze(-1)
                 assert len(params["image_dim"].size()) == len(image_mask.size())
@@ -1031,23 +893,15 @@ class LXMERT(BaseModel):
                 visual_pos=params["pos"],
                 visual_attention_mask=params["image_attention_mask"],
                 masked_lm_labels=params["masked_lm_labels"],
-<<<<<<< HEAD
                 masked_image_labels=params["masked_image_labels"],
-=======
->>>>>>> added all untestest config options and stadnardized all input/output to lxmert to match MMF style
                 obj_labels=params["obj_labels"],
                 matched_label=params["matched_label"],
                 ans=params["ans"],
             )
-<<<<<<< HEAD
-=======
-
->>>>>>> added all untestest config options and stadnardized all input/output to lxmert to match MMF style
             loss_key = "{}/{}".format(
                 sample_list.dataset_name, sample_list.dataset_type
             )
             output_dict["losses"] = {}
-<<<<<<< HEAD
             if "masked_lm_loss" in output_dict.keys():
                 output_dict["losses"][loss_key + "/masked_lm_loss"] = output_dict.pop(
                     "masked_lm_loss"
@@ -1056,28 +910,13 @@ class LXMERT(BaseModel):
                 output_dict["losses"][loss_key + "/matched_loss"] = output_dict.pop(
                     "matched_loss"
                 )
-            if "total_visn_loss" in output_dict.keys():
+            if "visn_loss" in output_dict.keys():
                 output_dict["losses"][loss_key + "/visn_loss"] = output_dict.pop(
                     "visn_loss"
                 )
             if "answer_loss" in output_dict.keys():
                 output_dict["losses"][loss_key + "/answer_loss"] = output_dict.pop(
-                    "answer_loss"
-=======
-
-            output_dict["losses"][loss_key + "/masked_lm_loss"] = output_dict.pop(
-                "masked_lm_loss"
-            )
-            output_dict["losses"][loss_key + "/matched_loss"] = output_dict.pop(
-                "matched_loss"
-            )
-            output_dict["losses"][loss_key + "/visn_loss"] = output_dict.pop(
-                "total_visn_loss"
-            )
-            output_dict["losses"][loss_key + "/answer_loss"] = output_dict.pop(
-                "answer_loss"
->>>>>>> added all untestest config options and stadnardized all input/output to lxmert to match MMF style
-            )
+                    "answer_loss")
         else:
             output_dict = self.model(
                 input_ids=params["input_ids"],

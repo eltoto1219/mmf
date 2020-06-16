@@ -1,5 +1,5 @@
 model_config:
-  vilbert:
+  lxmert:
     training_head_type: pretraining
 
 dataset_config:
@@ -20,7 +20,7 @@ scheduler:
     num_training_steps: 11000
 
 training:
-  batch_size: 480
+  batch_size: 256
   lr_scheduler: true
   # Don't forget to update schedule_attributes if you update this
   max_updates: 11000

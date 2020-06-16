@@ -19,7 +19,6 @@ import math
 import os
 import numpy as np
 import torch
-import random
 from omegaconf import OmegaConf
 from torch import nn
 from torch.nn import CrossEntropyLoss, SmoothL1Loss
@@ -353,7 +352,6 @@ class VisualFeatEncoder(nn.Module):
 
     def forward(self, visn_input):
         feats, boxes = visn_input
-
         x = self.visn_fc(feats)
         x = self.visn_layer_norm(x)
         if boxes is not None:
@@ -593,6 +591,13 @@ class LXMERTForPretraining(nn.Module):
         if self.task_qa:
             self.answer_head = BertVisualAnswerHead(config, self.num_labels)
 
+        # loss functions
+        self.loss_fct = CrossEntropyLoss(ignore_index=-1)
+        self.loss_fcts = {
+            "l2": SmoothL1Loss(reduction="none"),
+            "ce": CrossEntropyLoss(ignore_index=-1, reduction="none"),
+        }
+
     def init_weights(self):
         if self.config.random_initialize is False:
             if self.config.bert_model_name is None:
@@ -652,26 +657,22 @@ class LXMERTForPretraining(nn.Module):
             answer_score = pooled_output[0][0]
 
         total_loss = 0.0
-        loss_fct = CrossEntropyLoss(ignore_index=-1)
 
         if masked_lm_labels is not None and self.task_mask_lm:
-            masked_lm_loss = loss_fct(
+            masked_lm_loss = self.loss_fct(
                 lang_prediction_scores.view(-1, lang_prediction_scores.size(-1)),
                 masked_lm_labels.view(-1),
             )
             total_loss += masked_lm_loss
             output["masked_lm_loss"] = masked_lm_loss.detach()
         if matched_label is not None and self.task_matched:
-            matched_loss = loss_fct(
+            matched_loss = self.loss_fct(
                 cross_relationship_score.view(-1, 2), matched_label.view(-1)
             )
             total_loss += matched_loss
             output["matched_loss"] = matched_loss.detach()
+            # if loss errors out try: matched_loss.unsqueeze(0)
         if obj_labels is not None and self.task_obj_predict:
-            loss_fcts = {
-                "l2": SmoothL1Loss(reduction="none"),
-                "ce": CrossEntropyLoss(ignore_index=-1, reduction="none"),
-            }
             total_visn_loss = 0.0
             visn_prediction_scores_dict = self.obj_predict_head(visn_output)
             for key in self.visual_losses:
@@ -682,7 +683,7 @@ class LXMERTForPretraining(nn.Module):
                     label_shape,
                     weight,
                 ) = self.visual_loss_config[key]
-                visn_loss_fct = loss_fcts[loss_fct_name]
+                visn_loss_fct = self.loss_fcts[loss_fct_name]
                 visn_prediction_scores = visn_prediction_scores_dict[key]
                 visn_loss = visn_loss_fct(
                     visn_prediction_scores.view(-1, output_dim),
@@ -694,17 +695,13 @@ class LXMERTForPretraining(nn.Module):
                 visn_loss = (visn_loss * mask_conf.view(-1)).mean() * weight
                 total_visn_loss += visn_loss
                 output["{}_loss".format(key)] = visn_loss.detach()
-
-            total_loss += total_visn_loss
             output["total_visn_loss"] = total_visn_loss
-        if ans is not None and self.task_qa:
-            answer_loss = loss_fct(
+        if self.task_qa:
+            answer_loss = self.loss_fct(
                 answer_score.view(-1, self.num_labels), ans.view(-1)
             )
-            total_loss += answer_loss
             output["answer_loss"] = answer_loss.detach()
         output["anwer_score"] = answer_score.detach()
-        output["total_loss"] = total_loss
         return output
 
 
@@ -806,77 +803,134 @@ class LXMERT(BaseModel):
                 p.requires_grad = False
 
     def get_image_and_text_features(self, sample_list):
-        # i added back some original code from VilBERT, not sure how much you changed
-        # I only did so to keep  everything compatabile for the downstream forward
-        # pass defined below
-        # if we run into troubles for nlvr2, we can add back the other stuff
-        # IMPORTANT: if we end up looking for answer to question, it may be in
-        # the sample list
+        # print sample list to see if "is_matched" variable is avialable"
         bert_input_ids = sample_list.input_ids
         bert_input_mask = sample_list.input_mask
         bert_input_type_ids = sample_list.segment_ids
-        masked_lm_labels = sample_list.lm_label_ids
 
-        ####
-        image_info = getattr(sample_list, "image_info_0", {})
-        image_dim_variable = getattr(image_info, "max_features", None)
-        image_feature_variable = getattr(sample_list, "image_feature_0", None)
-        image_label_variable = getattr(sample_list, "image_labels", None)
-        if image_label_variable is not None:
-            image_label_variable = torch.tensor(
-                image_label_variable, dtype=torch.long
+        if sample_list.dataset_name == "nlvr2":
+            bert_input_ids = torch.cat([bert_input_ids, bert_input_ids])
+            bert_input_mask = torch.cat([bert_input_mask, bert_input_mask])
+            bert_input_type_ids = torch.cat([bert_input_type_ids, bert_input_type_ids])
+
+            # image input
+            img0 = getattr(sample_list, "img0", {})
+            image_info = getattr(img0, "image_info_0", {})
+            image_dim_variable_0 = getattr(image_info, "max_features", None)
+            image_feature_variable_0 = getattr(img0, "image_feature_0", None)
+
+            bbox = np.array(getattr(image_info, "bbox", None), dtype=np.float32)
+            image_w = np.array(
+                getattr(image_info, "image_width", None), dtype=np.float32
+            )
+            image_h = np.array(
+                getattr(image_info, "image_height", None), dtype=np.float32
+            )
+            image_location = np.zeros(
+                (bbox.shape[0], bbox.shape[1], 5), dtype=np.float32
+            )
+            image_location[:, :, :4] = bbox
+            image_location[:, :, 4] = (
+                (image_location[:, :, 3] - image_location[:, :, 1])
+                * (image_location[:, :, 2] - image_location[:, :, 0])
+                / (image_w * image_h)[:, None]
+            )
+            image_location[:, :, 0] = image_location[:, :, 0] / image_w[:, None]
+            image_location[:, :, 1] = image_location[:, :, 1] / image_h[:, None]
+            image_location[:, :, 2] = image_location[:, :, 2] / image_w[:, None]
+            image_location[:, :, 3] = image_location[:, :, 3] / image_h[:, None]
+            image_location_variable_0 = torch.tensor(
+                image_location, dtype=torch.float
             ).cuda()
 
-        # may want to check shape of bbox here -> may be source of error later
-        bbox = np.array(getattr(image_info, "bbox", None), dtype=np.float32)
-        image_w = np.array(
-            getattr(image_info, "image_width", None), dtype=np.float32
-        )
-        image_h = np.array(
-            getattr(image_info, "image_height", None), dtype=np.float32
-        )
-        image_location = np.zeros(
-            (bbox.shape[0], bbox.shape[1], 5), dtype=np.float32
-        )
-        image_location[:, :, :4] = bbox
-        image_location[:, :, 4] = (
-            (image_location[:, :, 3] - image_location[:, :, 1])
-            * (image_location[:, :, 2] - image_location[:, :, 0])
-            / (image_w * image_h)[:, None]
-        )
-        image_location[:, :, 0] = image_location[:, :, 0] / image_w[:, None]
-        image_location[:, :, 1] = image_location[:, :, 1] / image_h[:, None]
-        image_location[:, :, 2] = image_location[:, :, 2] / image_w[:, None]
-        image_location[:, :, 3] = image_location[:, :, 3] / image_h[:, None]
-        image_location_variable = torch.tensor(
-            image_location, dtype=torch.float
-        ).cuda()
+            img1 = getattr(sample_list, "img1", {})
+            image_info = getattr(img1, "image_info_0", {})
+            image_dim_variable_1 = getattr(image_info, "max_features", None)
+            image_feature_variable_1 = getattr(img1, "image_feature_0", None)
+            bbox = np.array(getattr(image_info, "bbox", None), dtype=np.float32)
+            image_w = np.array(
+                getattr(image_info, "image_width", None), dtype=np.float32
+            )
+            image_h = np.array(
+                getattr(image_info, "image_height", None), dtype=np.float32
+            )
+            image_location = np.zeros(
+                (bbox.shape[0], bbox.shape[1], 5), dtype=np.float32
+            )
+            image_location[:, :, :4] = bbox
+            image_location[:, :, 4] = (
+                (image_location[:, :, 3] - image_location[:, :, 1])
+                * (image_location[:, :, 2] - image_location[:, :, 0])
+                / (image_w * image_h)[:, None]
+            )
+            image_location[:, :, 0] = image_location[:, :, 0] / image_w[:, None]
+            image_location[:, :, 1] = image_location[:, :, 1] / image_h[:, None]
+            image_location[:, :, 2] = image_location[:, :, 2] / image_w[:, None]
+            image_location[:, :, 3] = image_location[:, :, 3] / image_h[:, None]
+            image_location_variable_1 = torch.tensor(
+                image_location, dtype=torch.float
+            ).cuda()
 
-        # idk what this is but could be useful
-        # cls_prob = getattr(image_info, "cls_prob", None)
-        # image_target = np.array(cls_prob, dtype=np.float32)
-        # image_target_variable = torch.tensor(image_target, dtype=torch.float).cuda()
+            image_feature_variable = torch.cat(
+                [image_feature_variable_0, image_feature_variable_1]
+            )
+            image_location_variable = torch.cat(
+                [image_location_variable_0, image_location_variable_1]
+            )
+            image_dim_variable = torch.cat([image_dim_variable_0, image_dim_variable_1])
+            image_label_variable = None
+        else:
+            image_info = getattr(sample_list, "image_info_0", {})
+            image_dim_variable = getattr(image_info, "max_features", None)
+            image_feature_variable = getattr(sample_list, "image_feature_0", None)
+            image_label_variable = getattr(sample_list, "image_labels", None)
+            if image_label_variable is not None:
+                image_label_variable = torch.tensor(
+                    image_label_variable, dtype=torch.long
+                ).cuda()
 
-        is_matched = 1
-        if self.config.task_matched:
-            if random.random() < 0.5:
-                is_matched = 0
-                ssf = torch.randperm(bert_input_ids.size(0))
-                bert_input_ids = bert_input_ids[ssf]
-                bert_input_mask = bert_input_mask[ssf]
-                bert_input_type_ids = bert_input_type_ids[ssf]
-                masked_lm_labels = masked_lm_labels[ssf]
+            bbox = np.array(getattr(image_info, "bbox", None), dtype=np.float32)
+            image_w = np.array(
+                getattr(image_info, "image_width", None), dtype=np.float32
+            )
+            image_h = np.array(
+                getattr(image_info, "image_height", None), dtype=np.float32
+            )
+            image_location = np.zeros(
+                (bbox.shape[0], bbox.shape[1], 5), dtype=np.float32
+            )
+            image_location[:, :, :4] = bbox
+            image_location[:, :, 4] = (
+                (image_location[:, :, 3] - image_location[:, :, 1])
+                * (image_location[:, :, 2] - image_location[:, :, 0])
+                / (image_w * image_h)[:, None]
+            )
+            image_location[:, :, 0] = image_location[:, :, 0] / image_w[:, None]
+            image_location[:, :, 1] = image_location[:, :, 1] / image_h[:, None]
+            image_location[:, :, 2] = image_location[:, :, 2] / image_w[:, None]
+            image_location[:, :, 3] = image_location[:, :, 3] / image_h[:, None]
+            image_location_variable = torch.tensor(
+                image_location, dtype=torch.float
+            ).cuda()
+
+        # should be provided already but keeping just incase
+        # is_matched = 1
+        # if self.config.task_matched:
+        # if random.random() < 0.5:
+        #        is_matched = 0
+        #        ssf = torch.randperm(bert_input_ids.size(0))
+        #        bert_input_ids = bert_input_ids[ssf]
+        #        bert_input_mask = bert_input_mask[ssf]
+        #        bert_input_type_ids = bert_input_type_ids[ssf]
+        #        masked_lm_labels = masked_lm_labels[ssf]
 
         return {
             "input_ids": bert_input_ids,
             "token_type_ids": bert_input_mask,
             "attention_mask": bert_input_type_ids,
-            "masked_lm_labels": masked_lm_labels,
             "visual_feats": image_feature_variable,
             "pos": image_location_variable,
             "obj_labels": image_label_variable,
-            "matched_label": is_matched,
-            "ans": None,
             "image_dim": image_dim_variable
         }
 
@@ -885,6 +939,10 @@ class LXMERT(BaseModel):
 
     def forward(self, sample_list):
         params = self.get_image_and_text_features(sample_list)
+        params["masked_lm_labels"] = getattr(sample_list, "lm_label_ids", None)
+        # this is the name of the softscore answer targets ins vqa2
+        # however, it has the same name in nlvr2
+        params["ans"] = getattr(sample_list, "targets", None)
 
         if params["image_feature"] is not None and params["image_dim"] is not None:
             image_mask = (
@@ -912,7 +970,7 @@ class LXMERT(BaseModel):
                 visual_attention_mask=params["image_attention_mask"],
                 masked_lm_labels=params["masked_lm_labels"],
                 obj_labels=params["obj_labels"],
-                matched_label=params["matched_label"],
+                matched_loss=None,
                 ans=params["ans"],
             )
 

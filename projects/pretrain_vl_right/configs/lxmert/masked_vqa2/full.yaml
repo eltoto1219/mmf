@@ -1,2 +1,1 @@
-includes:
-- ./defaults.yaml
+../../../../vilbert/configs/masked_vqa2/pretrain.yaml

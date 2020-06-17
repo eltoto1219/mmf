@@ -831,10 +831,10 @@ class LXMERT(BaseModel):
                 image_location = bbox
             image_location_variable = image_location.cuda()
 
-            if image_label_variable is not None:
-                image_label_variable = torch.tensor(
-                    image_label_variable, dtype=torch.long
-                    )[:, :max_features.item(), ...].cuda()
+        if image_label_variable is not None:
+            image_label_variable = torch.tensor(
+                image_label_variable, dtype=torch.long
+                )[:, :max_features.item(), ...].cuda()
 
         max_features = max_features.cuda()
 

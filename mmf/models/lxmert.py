@@ -1,4 +1,4 @@
-# Copyright 2019 project LXMERT.
+ # Copyright 2019 project LXMERT.
 # Copyright 2018 The Google AI Language Team Authors and The HuggingFace Inc. team.
 # Copyright (c) 2018, NVIDIA CORPORATION.  All rights reserved.
 # Copyright (c) Facebook, Inc. and its affiliates.
@@ -582,12 +582,9 @@ class LXMERTForPretraining(nn.Module):
             self.obj_predict_head = BertVisualObjHead(config)
             self.l1 = SmoothL1Loss(reduction="none")
             self.ce = CrossEntropyLoss(ignore_index=-1, reduction="none")
-
         if self.task_qa:
             self.answer_head = BertVisualAnswerHead(config, self.num_labels)
-
-        self.loss_fct = CrossEntropyLoss(ignore_index=-1)
-
+            self.loss_fct = CrossEntropyLoss(ignore_index=-1)
     def init_weights(self):
         if self.config.random_initialize is False:
             if self.config.bert_model_name is None:
@@ -667,14 +664,12 @@ class LXMERTForPretraining(nn.Module):
                     labels = visual_feats
                     mask_conf = (masked_image_labels == 1).float()
                     visn_loss_fct = self.l1
-                label, mask_conf = obj_labels[key]
                 (
                     output_dim,
                     loss_fct_name,
                     label_shape,
                     weight,
                 ) = self.visual_loss_config[key]
-                visn_loss_fct = loss_fcts[loss_fct_name]
                 visn_prediction_scores = visn_prediction_scores_dict[key]
                 visn_loss = visn_loss_fct(
                     visn_prediction_scores.view(-1, output_dim),
@@ -910,7 +905,7 @@ class LXMERT(BaseModel):
                 output_dict["losses"][loss_key + "/matched_loss"] = output_dict.pop(
                     "matched_loss"
                 )
-            if "visn_loss" in output_dict.keys():
+            if "total_visn_loss" in output_dict.keys():
                 output_dict["losses"][loss_key + "/visn_loss"] = output_dict.pop(
                     "visn_loss"
                 )

@@ -119,7 +119,6 @@ class InputFeatures(object):
 
         self.ans = ans
 
-        self.lxmert_aug = True
 
 class InputExample(object):
     """A single training/test example for the language model."""
@@ -133,7 +132,6 @@ class InputExample(object):
         self.attr_labels = attr_labels
         self.is_matched = is_matched  # whether the visual and obj matched
         self.label = label
-        self.lxmert_aug = True
 
 def convert_example_to_features(example: InputExample, max_seq_length, tokenizer)->InputFeatures:
     """

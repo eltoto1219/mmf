@@ -29,16 +29,26 @@ from mmf.utils.timer import Timer
 
 LXMERT_AUG = True
 TINY = True
+DATASET_NAME = "pretrain"
+TRAIN_NAME = "train"
+VALID_NAME = "valid"
+WORKERS = 4
+PIN = True
+BS_TRAIN = 256
+BS_VAL = 512
+SPLITS_VAL = "mscoco_minival"
+DROP_LAST = True
+QA_SETS = "vqa,gqa,visual7w"
 
 if TINY:
-    SPLITS = ["mscoco_minival"]
+    SPLITS_TRAIN = "mscoco_minival"
 else:
-    SPLITS = ["mscoco_train","mscoco_nominival","vgnococo"]
+    SPLITS_TRAIN = "mscoco_train,mscoco_nominival,vgnococo"
 
 if LXMERT_AUG:
     import sys
     sys.path.append("/playpen/lxmert_loader")
-    from lxmert_pretrain import get_tuple
+    from lxmert_data import get_tuple
 
 @registry.register_trainer("base_trainer")
 class BaseTrainer:
@@ -51,8 +61,9 @@ class BaseTrainer:
         self._set_device()
 
         self.run_type = self.config.get("run_type", "train")
-        self.dataset_loader = DatasetLoader(self.config)
-        self._datasets = self.config.datasets
+        if not LXMERT_AUG:
+            self.dataset_loader = DatasetLoader(self.config)
+            self._datasets = self.config.datasets
 
         # Check if loader is already defined, else init it
         writer = registry.get("writer", no_warning=True)
@@ -67,7 +78,6 @@ class BaseTrainer:
             configuration.pretty_print()
 
         self.config_based_setup()
-
         self.load_datasets()
         self.load_model_and_optimizer()
         self.load_metrics()
@@ -107,26 +117,29 @@ class BaseTrainer:
             self.val_loader = self.dataset_loader.val_loader
             self.test_loader = self.dataset_loader.test_loader
         else:
+            # try with tiny first
+            train_tuple = get_tuple(
+                    splits=SPLITS_TRAIN,
+                    bs=BS_TRAIN,
+                    shuffle=SHUFFLE,
+                    drop_last=DROP_LAST,
+                    topk=-1,
+                    qa_sets=QA_SETS)
+            valid_tuple = get_tuple(
+                    splits=SPLITS_TRAIN,
+                    bs=BS_TRAIN,
+                    shuffle=SHUFFLE,
+                    drop_last=DROP_LAST,
+                    topk=5000,
+                    qa_sets=QA_SETS)
+
+            self.train_dataset = train_tuple.dataset
+            self.val_dataset = valid_tuple.dataset
+            self.train_loader = train_tuple.loader
+            self.val_loader = valid_tuple.loader
+
             self.snapshot_iterations = len(self.val_dataset)
             self.snapshot_iterations //= self.config.training.batch_size
-
-            # try with tiny first
-            train_tuple = get_tuple(SPLITS,
-                    256,
-                    shuffle=True,
-                    drop_last=True)
-            valid_batch_size = 512
-            valid_tuple = get_tuple(
-                    ["mscoco_minival"],
-                    valid_batch_size,
-                    shuffle=False,
-                    drop_last=False,
-                    topk=5000)
-
-            self.train_dataset = train_tuple["torchdset"]
-            self.val_dataset = valide_tuple["torchdset"]
-            self.train_loader = self.dataset_loader.loader
-            self.val_loader = self.dataset_loader.loader
 
     def load_metrics(self):
         metrics = self.config.evaluation.get("metrics", [])
@@ -276,6 +289,8 @@ class BaseTrainer:
                 break
 
             for batch in self.train_loader:
+                if LXMERT_AUG:
+                    batch.lxmert_aug = True
                 self.profile("Batch load time")
                 self.current_iteration += 1
                 self.writer.write(self.num_updates + 1, "debug")

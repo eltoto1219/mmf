@@ -16,7 +16,6 @@
 # limitations under the License.
 
 import math
-import random
 import os
 import numpy as np
 import torch
@@ -26,176 +25,19 @@ from torch import nn
 from torch.nn import CrossEntropyLoss, SmoothL1Loss
 from transformers.modeling_bert import (
     ACT2FN,
-    BertConfig,
-    BertIntermediate,
+    BertConfig,  # removed this from lxmert class def
+    BertIntermediate,  # removed this from lxmert class def
     BertLayerNorm,
-    BertOutput,
+    # BertLMPredictionHead, keep custom class here bc we want to load custom weight
+    BertOutput,  # removed custom lxmert class bc nothing was changed
     BertPredictionHeadTransform,
-    BertPreTrainedModel,
+    BertPreTrainedModel,  # got rid of custom LXMERT class temporarily
 )
 
 from mmf.common.registry import registry
 from mmf.models import BaseModel
 from mmf.utils.configuration import get_mmf_cache_dir
 from mmf.utils.modeling import get_optimizer_parameters_for_bert
-
-def random_word(tokens, tokenizer):
-    """
-    Masking some random tokens for Language Model task with probabilities as in the original BERT paper.
-    :param tokens: list of str, tokenized sentence.
-    :param tokenizer: Tokenizer, object used for tokenization (we need it's vocab here)
-    :return: (list of str, list of int), masked tokens and related labels for LM prediction
-    """
-    output_label = []
-
-    for i, token in enumerate(tokens):
-        prob = random.random()
-        # mask token with probability
-        ratio = args.word_mask_rate
-        if prob < ratio:
-            prob /= ratio
-
-            # 80% randomly change token to mask token
-            if prob < 0.8:
-                tokens[i] = "[MASK]"
-
-            # 10% randomly change token to random token
-            elif prob < 0.9:
-                tokens[i] = random.choice(list(tokenizer.vocab.items()))[0]
-
-            # -> rest 10% randomly keep current token
-
-            # append current token to output (we will predict these later)
-            try:
-                output_label.append(tokenizer.vocab[token])
-            except KeyError:
-                # For unknown words (should not occur with BPE vocab)
-                output_label.append(tokenizer.vocab["[UNK]"])
-        else:
-            # no masking token (will be ignored by loss function later)
-            output_label.append(-1)
-
-    return tokens, output_label
-
-def random_feat(feats):
-    mask_feats = feats.copy()
-    feat_mask = np.zeros(len(feats), dtype=np.float32)
-    for i in range(len(feats)):
-        prob = random.random()
-        # mask token with probability
-        if prob < args.obj_mask_rate:
-            prob /= args.obj_mask_rate
-
-            # 80% randomly change token to zero feat
-            if prob < 0.8:
-                mask_feats[i, :] = 0.
-
-            # 10% randomly change token to random feat
-            elif prob < 0.9:
-                mask_feats[i, :] = train_tuple.torchdset.random_feat()
-            # -> rest 10% randomly keep current feat
-
-            # Need to predict this feat
-            feat_mask[i] = 1.
-
-    return mask_feats, feat_mask
-
-class InputFeatures(object):
-    """A single set of features of data."""
-
-    def __init__(self,
-                 input_ids, input_mask, segment_ids, lm_label_ids,
-                 visual_feats, obj_labels,
-                 is_matched, ans):
-        self.input_ids = input_ids
-        self.input_mask = input_mask
-        self.segment_ids = segment_ids
-        self.lm_label_ids = lm_label_ids
-
-        self.visual_feats = visual_feats
-        self.obj_labels = obj_labels
-
-        self.is_matched = is_matched
-
-        self.ans = ans
-
-        self.lxmert_aug = True
-
-def convert_example_to_features(example: InputExample, max_seq_length, tokenizer)->InputFeatures:
-    """
-    Convert a raw sample (pair of sentences as tokenized strings) into a proper training sample with
-    IDs, LM labels, input_mask, CLS and SEP tokens etc.
-    :param example: InputExample, containing sentence input as strings and is_next label
-    :param max_seq_length: int, maximum length of sequence.
-    :param tokenizer: Tokenizer
-    :return: InputFeatures, containing all inputs and labels of one sample as IDs (as used for model training)
-    """
-    tokens = tokenizer.tokenize(example.sent.strip())
-
-    # Account for [CLS] and [SEP] with "- 2"
-    if len(tokens) > max_seq_length - 2:
-        tokens = tokens[:(max_seq_length - 2)]
-
-    # Ge random words
-    masked_tokens, masked_label = random_word(tokens, tokenizer)
-
-    # concatenate lm labels and account for CLS, SEP, SEP
-    masked_tokens = ['[CLS]'] + masked_tokens + ['[SEP]']
-    input_ids = tokenizer.convert_tokens_to_ids(masked_tokens)
-
-    # Mask & Segment Word
-    lm_label_ids = ([-1] + masked_label + [-1])
-    input_mask = [1] * len(input_ids)
-    segment_ids = [0] * len(input_ids)
-
-    # Zero-pad up to the sequence length.
-    while len(input_ids) < max_seq_length:
-        input_ids.append(0)
-        input_mask.append(0)
-        segment_ids.append(0)
-        lm_label_ids.append(-1)
-
-    assert len(input_ids) == max_seq_length
-    assert len(input_mask) == max_seq_length
-    assert len(segment_ids) == max_seq_length
-    assert len(lm_label_ids) == max_seq_length
-
-    feat, boxes = example.visual_feats
-    obj_labels, obj_confs = example.obj_labels
-    attr_labels, attr_confs = example.attr_labels
-
-    # Mask Image Features:
-    masked_feat, feat_mask = random_feat(feat)
-
-    # QA answer label
-    if example.label is None or len(example.label) == 0 or example.is_matched != 1:
-        # 1. No label 2. Label is pruned 3. unmatched visual + language pair
-        ans = -1
-    else:
-        keys, values = zip(*example.label.items())
-        if len(keys) == 1:
-            ans = keys[0]
-        else:
-            value_sum = sum(values)
-            prob = [value / value_sum for value in values]
-            choice = np.random.multinomial(1, prob).argmax()
-            ans = keys[choice]
-
-    features = InputFeatures(
-        input_ids=input_ids,
-        input_mask=input_mask,
-        segment_ids=segment_ids,
-        lm_label_ids=lm_label_ids,
-        visual_feats=(masked_feat, boxes),
-        obj_labels={
-            'obj': (obj_labels, obj_confs),
-            'attr': (attr_labels, attr_confs),
-            'feat': (feat, feat_mask),
-        },
-        is_matched=example.is_matched,
-        ans=ans,
-    )
-    return features
 
 
 def gelu(x):
@@ -457,6 +299,7 @@ class BertVisualObjHead(nn.Module):
         self.transform = BertPredictionHeadTransform(config)
 
         self.visual_losses = config.visual_losses
+
         # The output weights are the same as the input embeddings, but there is
         # an output-only bias for each token.
         self.decoder_dict = nn.ModuleDict(
@@ -592,7 +435,13 @@ class LXMERTEncoder(nn.Module):
         self.num_l_layers = config.l_layers
         self.num_x_layers = config.x_layers
         self.num_r_layers = config.r_layers
+        print(
+            "LXMERT encoder with %d l_layers, %d x_layers, and %d r_layers."
+            % (self.num_l_layers, self.num_x_layers, self.num_r_layers)
+        )
 
+        # Layers
+        # Using self.layer instead of self.l_layer to support loading BERT weights.
         self.layer = nn.ModuleList(
             [BertLayer(config) for _ in range(self.num_l_layers)]
         )
@@ -647,7 +496,7 @@ class LXMERTBase(BertPreTrainedModel):
         visual_loc=None,
         visual_attention_mask=None,
         output_all_attention_masks=False,
-        output_all_encoded_layers=False,
+        output_all_encoded_layers=False
     ):
 
         if output_all_encoded_layers:
@@ -656,7 +505,6 @@ class LXMERTBase(BertPreTrainedModel):
             raise NotImplementedError
 
         visual_feats = (visual_feats, visual_loc)
-
         if attention_mask is None:
             attention_mask = torch.ones_like(input_ids)
         if token_type_ids is None:
@@ -740,10 +588,11 @@ class LXMERTForPretraining(nn.Module):
             self.obj_predict_head = BertVisualObjHead(config)
             self.l1 = SmoothL1Loss(reduction="none")
             self.ce = CrossEntropyLoss(ignore_index=-1, reduction="none")
+
         if self.task_qa:
             self.answer_head = BertVisualAnswerHead(config, self.num_labels)
-            self.loss_fct = CrossEntropyLoss(ignore_index=-1)
 
+        self.loss_fct = CrossEntropyLoss(ignore_index=-1)
     def init_weights(self):
         if self.config.random_initialize is False:
             if self.config.bert_model_name is None:
@@ -798,6 +647,12 @@ class LXMERTForPretraining(nn.Module):
         if output_all_attention_masks:
             raise NotImplementedError
 
+        if self.task_qa:
+            answer_score = self.answer_head(pooled_output)
+        else:
+            answer_score = pooled_output[0][0]
+
+
         if masked_lm_labels is not None and self.task_mask_lm:
             masked_lm_loss = self.loss_fct(
                 lang_prediction_scores.view(-1, lang_prediction_scores.size(-1)),
@@ -811,6 +666,7 @@ class LXMERTForPretraining(nn.Module):
             )
             output["matched_loss"] = matched_loss
         if obj_labels is not None and self.task_obj_predict:
+
             total_visn_loss = 0.0
             visn_prediction_scores_dict = self.obj_predict_head(visn_output)
             for key in self.visual_losses:
@@ -837,14 +693,13 @@ class LXMERTForPretraining(nn.Module):
                 if visn_loss.dim() > 1:  # Regression Losses
                     visn_loss = visn_loss.mean(1)
                 visn_loss = (visn_loss * mask_conf.view(-1)).mean() * weight
-                total_visn_loss += visn_loss
-                output["{}_loss".format(key)] = visn_loss
-            output["visn_loss"] = total_visn_loss
 
+                total_visn_loss += visn_loss
+            output["total_visn_loss"] = total_visn_loss
         if ans is not None and self.task_qa:
-            answer_score = self.answer_head(pooled_output)
             answer_loss = self.loss_fct(
-                answer_score.view(-1, self.config.num_labels), ans.argmax(-1)
+                answer_score.view(-1, self.num_labels), ans.argmax(-1)
+            )
             output["answer_loss"] = answer_loss
 
         return output
@@ -855,7 +710,6 @@ class LXMERTForClassification(nn.Module):
         super().__init__()
 
         self.config = config
-        self.num_labels =  config.num_labels
         self.mode = config.mode
         self.bert = LXMERTBase.from_pretrained(
             self.config.bert_model_name,
@@ -890,8 +744,8 @@ class LXMERTForClassification(nn.Module):
         visual_pos=None,
         visual_attention_mask=None,
         masked_lm_labels=None,
-        obj_labels=None,
-        matched_label=None,
+        obj_labels=None,  # is img_labels in vilbert
+        matched_label=None,  # next_sent_label in VilBERT
         ans=None,
         output_all_attention_masks=False,
         output_all_encoded_layers=False
@@ -909,7 +763,6 @@ class LXMERTForClassification(nn.Module):
         )
 
         output = {}
-
         if output_all_attention_masks:
             raise NotImplementedError
 
@@ -921,6 +774,7 @@ class LXMERTForClassification(nn.Module):
         output["scores"] = reshaped_logits
 
         return output
+
 
 @registry.register_model("lxmert")
 class LXMERT(BaseModel):
@@ -951,60 +805,64 @@ class LXMERT(BaseModel):
                 p.requires_grad = False
 
     def get_image_and_text_features(self, sample_list):
+        # i added back some original code from VilBERT, not sure how much you changed
+        # I only did so to keep  everything compatabile for the downstream forward
+        # pass defined below
+        # if we run into troubles for nlvr2, we can add back the other stuff
+        # IMPORTANT: if we end up looking for answer to question, it may be in
+        # the sample list
         bert_input_ids = sample_list.input_ids
         bert_input_mask = sample_list.input_mask
         bert_input_type_ids = sample_list.segment_ids
         masked_lm_labels = sample_list.lm_label_ids
 
+        ####
+
         image_info = getattr(sample_list, "image_info_0", {})
+#         image_info.momoda
         image_dim_variable = getattr(image_info, "max_features", None)
 
         image_feature_variable = getattr(sample_list, "image_feature_0", None)
         image_label_variable = getattr(sample_list, "image_labels", None)
-
-        bbox = getattr(image_info, "bbox", None)
-        if bbox is not None:
-            bbox = torch.tensor(bbox)
-            max_features = torch.tensor(36, dtype=torch.int)
-            assert image_feature_variable.shape[-1] == 2048, "{}".format(image_feature_variable.shape[-1])
-            bbox = bbox[:, :max_features.item(), ...]
-            image_feature_variable = image_feature_variable[:, :, :max_features.item()]
-            assert image_feature_variable.shape[1] == bbox.shape[1]
-            image_h = getattr(image_info, "image_height", None)
-            image_w = getattr(image_info, "image_width", None)
-            if image_h is not None and image_w  is not None:
-                image_h = torch.tensor(image_h, dtype=torch.int)
-                image_w = torch.tensor(image_w, dtype=torch.int)
-                image_location = torch.zeros(tuple(bbox.shape))
-                image_location[:, :, 0] = image_location[:, :, 0] / image_w[:, None]
-                image_location[:, :, 1] = image_location[:, :, 1] / image_h[:, None]
-                image_location[:, :, 2] = image_location[:, :, 2] / image_w[:, None]
-                image_location[:, :, 3] = image_location[:, :, 3] / image_h[:, None]
-            else:
-                max_features =  image_dim_variable
-                image_location = bbox
-            image_location_variable = image_location.cuda()
-
         if image_label_variable is not None:
             image_label_variable = torch.tensor(
                 image_label_variable, dtype=torch.long
-                )[:, :max_features.item(), ...].cuda()
+            ).cuda()
 
-        max_features = max_features.cuda()
+        # may want to check shape of bbox here -> may be source of error later
+        bbox = np.array(getattr(image_info, "bbox", None), dtype=np.float32)
+        image_w = np.array(
+            getattr(image_info, "image_width", None), dtype=np.float32
+        )
+        image_h = np.array(
+            getattr(image_info, "image_height", None), dtype=np.float32
+        )
+        image_location = np.zeros(
+            (bbox.shape[0], bbox.shape[1], 4), dtype=np.float32
+        )
+        image_location[:, :, :4] = bbox
+        image_location[:, :, 0] = image_location[:, :, 0] / image_w[:, None]
+        image_location[:, :, 1] = image_location[:, :, 1] / image_h[:, None]
+        image_location[:, :, 2] = image_location[:, :, 2] / image_w[:, None]
+        image_location[:, :, 3] = image_location[:, :, 3] / image_h[:, None]
+        image_location_variable = torch.tensor(
+            image_location, dtype=torch.float
+        ).cuda()
 
         cls_prob = getattr(image_info, "cls_prob", None)
         if cls_prob is not None:
             cls_prob = torch.tensor(cls_prob).cuda()
 
-        answers = getattr(sample_list, "targets", None)
-        if answers is not None:
-            answers = torch.tensor(answers).cuda()
-        is_correct = getattr(sample_list, "is_correct", None)
-        if is_correct is not None:
-            if isinstance(is_correct, torch.Tensor):
-                is_correct = is_correct.cuda()
-            else:
-                is_correct = torch.tensor(is_correct).cuda()
+        is_matched = 1
+        if self.config.task_matched:
+            if random.random() < 0.5:
+                is_matched = 0
+                ssf = torch.randperm(bert_input_ids.size(0))
+                bert_input_ids = bert_input_ids[ssf]
+                bert_input_mask = bert_input_mask[ssf]
+                bert_input_type_ids = bert_input_type_ids[ssf]
+                masked_lm_labels = masked_lm_labels[ssf]
+        answers = sample_list.targets
 
         return {
             "input_ids": bert_input_ids,
@@ -1015,9 +873,9 @@ class LXMERT(BaseModel):
             "pos": image_location_variable,
             "masked_image_labels": image_label_variable,
             "obj_labels": cls_prob,
-            "matched_label": is_correct,
+            "matched_label": is_matched,
             "ans": answers,
-            "image_dim": max_features
+            "image_dim": image_dim_variable
         }
 
     def get_optimizer_parameters(self, config):
@@ -1025,45 +883,24 @@ class LXMERT(BaseModel):
 
     def forward(self, sample_list):
         params = self.get_image_and_text_features(sample_list)
+
         if params["visual_feats"] is not None and params["image_dim"] is not None:
-            image_mask = torch.arange(params["visual_feats"].size(-2))\
-                .expand(*params["visual_feats"].size()[:-1])\
+            image_mask = (
+                torch.arange(params["visual_feats"].size(-2))
+                .expand(*params["visual_feats"].size()[:-1])
                 .cuda()
+            )
             if len(params["image_dim"].size()) < len(image_mask.size()):
                 params["image_dim"] = params["image_dim"].unsqueeze(-1)
                 assert len(params["image_dim"].size()) == len(image_mask.size())
             image_mask = image_mask < params["image_dim"]
             params["image_attention_mask"] = image_mask.long()
         else:
-            params = {}
-            train_features = [convert_example_to_features(example, self.max_seq_length, self.tokenizer)
-                for example in examples]
-            # language Inputs
-            params['input_ids'] = torch.tensor([f.input_ids for f in train_features], dtype=torch.long).cuda()
-            params["token_type_ids"] = segment_ids = torch.tensor([f.segment_ids for f in train_features], dtype=torch.long).cuda()
-            params['attention_mask'] = torch.tensor([f.input_mask for f in train_features], dtype=torch.long).cuda()
-            # Visual Inputs
-            params["visual_feat"] = feats = torch.from_numpy(np.stack([f.visual_feats[0] for f in train_features])).cuda()
-            params["pos"] = torch.from_numpy(np.stack([f.visual_feats[1] for f in train_features])).cuda()
             params["image_attention_mask"] = None
-            # Language Prediction
-            params["masked_lm_labels"] = torch.tensor([f.lm_label_ids for f in train_features], dtype=torch.long).cuda()
-            # Visual Prediction
-            obj_labels = {}
-            visn_labels = {}
-            for key in ('obj', 'attr', 'feat'):
-                visn_labels = torch.from_numpy(np.stack([f.obj_labels[key][0] for f in train_features])).cuda()
-                visn_mask = torch.from_numpy(np.stack([f.obj_labels[key][1] for f in train_features])).cuda()
-                assert visn_labels.size(0) == visn_mask.size(0) and visn_labels.size(1) == visn_mask.size(1)
-                obj_labels[key] = visn_labels
-                visn_labels[key] = visn_mask
-            # Joint Prediction
-            params["masked_image_labels"] = visn_labels
-            params["obj_labesl"] = obj_labels
-            params["matched_labels"] = torch.tensor([f.is_matched for f in train_features], dtype=torch.long).cuda()
-            params["ans"] = torch.from_numpy(np.stack([f.ans for f in train_features])).cuda()
+        params.pop("image_dim")
 
         if self.config.training_head_type == "pretraining":
+
             output_dict = self.model(
                 input_ids=params["input_ids"],
                 token_type_ids=params["token_type_ids"],
@@ -1077,6 +914,7 @@ class LXMERT(BaseModel):
                 matched_label=params["matched_label"],
                 ans=params["ans"],
             )
+
             loss_key = "{}/{}".format(
                 sample_list.dataset_name, sample_list.dataset_type
             )
@@ -1091,11 +929,12 @@ class LXMERT(BaseModel):
                 )
             if "total_visn_loss" in output_dict.keys():
                 output_dict["losses"][loss_key + "/visn_loss"] = output_dict.pop(
-                    "visn_loss"
+                    "total_visn_loss"
                 )
             if "answer_loss" in output_dict.keys():
                 output_dict["losses"][loss_key + "/answer_loss"] = output_dict.pop(
-                    "answer_loss")
+                    "answer_loss"
+            )
         else:
             output_dict = self.model(
                 input_ids=params["input_ids"],

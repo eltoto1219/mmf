@@ -1,11 +1,3 @@
-model_config:
-  lxmert:
-    training_head_type: pretraining
-    task_matched: true
-    task_mask_lm: true
-    task_obj_predict: true
-    num_labels: 3129
-
 dataset_config:
   masked_vqa2:
     use_images: false

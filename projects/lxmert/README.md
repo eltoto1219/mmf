@@ -40,4 +40,3 @@ mmf_run config=projects/lxmert/configs/vqa2/defaults.yaml run_type=train_val dat
 ```
 
 Based on the config used and `training_head_type` defined in the config, the model can use either pretraining head or donwstream task specific heads(VQA).
-

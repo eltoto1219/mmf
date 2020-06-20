@@ -16,11 +16,11 @@ from mmf.utils.general import get_optimizer_parameters
 def build_config(
     configuration: Type[Configuration], *args, **kwargs
 ) -> mmf_typings.DictConfig:
-    """Builder function for config. Freezes the configuration and registers 
+    """Builder function for config. Freezes the configuration and registers
     configuration object and config DictConfig object to registry.
 
     Args:
-        configuration (Configuration): Configuration object that will be 
+        configuration (Configuration): Configuration object that will be
             used to create the config.
 
     Returns:

@@ -28,6 +28,13 @@ from mmf.utils.logger import Logger, TensorboardLogger
 from mmf.utils.timer import Timer
 
 LXMERT_AUG = True
+TINY = True
+
+if TINY:
+    SPLITS = ["mscoco_minival"]
+else:
+    SPLITS = ["mscoco_train","mscoco_nominival","vgnococo"]
+
 if LXMERT_AUG:
     import sys
     sys.append("/playpen/lxmert_loader")
@@ -103,7 +110,8 @@ class BaseTrainer:
             self.snapshot_iterations = len(self.val_dataset)
             self.snapshot_iterations //= self.config.training.batch_size
 
-            train_tuple = get_tuple(["mscoco_train","mscoco_nominival","vgnococo"],
+            # try with tiny first
+            train_tuple = get_tuple(SPLITS,
                     256
                     shuffle=True,
                     drop_last=True)
@@ -119,7 +127,6 @@ class BaseTrainer:
             self.val_dataset = valide_tuple["torchdset"]
             self.train_loader = self.dataset_loader.loader
             self.val_loader = self.dataset_loader.loader
-
 
     def load_metrics(self):
         metrics = self.config.evaluation.get("metrics", [])
@@ -272,27 +279,6 @@ class BaseTrainer:
                 self.profile("Batch load time")
                 self.current_iteration += 1
                 self.writer.write(self.num_updates + 1, "debug")
-
-
-                # currently the input of lxmert looks like thish
-                # self, input_ids, token_type_ids=None, attention_mask=None, masked_lm_labels=None,
-                # visual_feats=None, pos=None, obj_labels=None, matched_label=None, ans=None
-
-                #the input from the sample
-
-                # uid, sent, (feats, boxes),
-                # (obj_labels, obj_confs), (attr_labels, attr_confs),
-                # is_matched, label
-
-                self.uid = uid
-                self.sent = sent
-                self.visual_feats = visual_feats
-                self.obj_labels = obj_labels
-                self.attr_labels = attr_labels
-                self.is_matched = is_matched  # whether the visual and obj matched
-                self.label = label
-
-
                 report = self._forward_pass(batch)
                 loss = self._extract_loss(report)
                 self._backward(loss)

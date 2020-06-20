@@ -27,11 +27,6 @@ from mmf.utils.general import clip_gradients, print_model_parameters
 from mmf.utils.logger import Logger, TensorboardLogger
 from mmf.utils.timer import Timer
 
-LXMERT_AUG = True
-if LXMERT_AUG:
-    import sys
-    sys.append("/playpen/lxmert_loader")
-    from lxmert_pretrain import get_tuple
 
 @registry.register_trainer("base_trainer")
 class BaseTrainer:
@@ -84,42 +79,21 @@ class BaseTrainer:
         registry.register("current_device", self.device)
 
     def load_datasets(self):
-        if not LXMERT_AUG:
-            self.writer.write("Loading datasets", "info")
-            self.dataset_loader.load_datasets()
-            self.train_dataset = self.dataset_loader.train_dataset
-            self.val_dataset = self.dataset_loader.val_dataset
+        self.writer.write("Loading datasets", "info")
+        self.dataset_loader.load_datasets()
 
-            # Total iterations for snapshot
-            self.snapshot_iterations = len(self.val_dataset)
-            self.snapshot_iterations //= self.config.training.batch_size
+        self.train_dataset = self.dataset_loader.train_dataset
+        self.val_dataset = self.dataset_loader.val_dataset
 
-            self.test_dataset = self.dataset_loader.test_dataset
+        # Total iterations for snapshot
+        self.snapshot_iterations = len(self.val_dataset)
+        self.snapshot_iterations //= self.config.training.batch_size
 
-            self.train_loader = self.dataset_loader.train_loader
-            self.val_loader = self.dataset_loader.val_loader
-            self.test_loader = self.dataset_loader.test_loader
-        else:
-            self.snapshot_iterations = len(self.val_dataset)
-            self.snapshot_iterations //= self.config.training.batch_size
+        self.test_dataset = self.dataset_loader.test_dataset
 
-            train_tuple = get_tuple(["mscoco_train","mscoco_nominival","vgnococo"],
-                    256
-                    shuffle=True,
-                    drop_last=True)
-            valid_batch_size = 512
-            valid_tuple = get_tuple(
-                    ["mscoco_minival"],
-                    valid_batch_size,
-                    shuffle=False,
-                    drop_last=False,
-                    topk=5000)
-
-            self.train_dataset = train_tuple["torchdset"]
-            self.val_dataset = valide_tuple["torchdset"]
-            self.train_loader = self.dataset_loader.loader
-            self.val_loader = self.dataset_loader.loader
-
+        self.train_loader = self.dataset_loader.train_loader
+        self.val_loader = self.dataset_loader.val_loader
+        self.test_loader = self.dataset_loader.test_loader
 
     def load_metrics(self):
         metrics = self.config.evaluation.get("metrics", [])
@@ -272,26 +246,6 @@ class BaseTrainer:
                 self.profile("Batch load time")
                 self.current_iteration += 1
                 self.writer.write(self.num_updates + 1, "debug")
-
-
-                # currently the input of lxmert looks like thish
-                # self, input_ids, token_type_ids=None, attention_mask=None, masked_lm_labels=None,
-                # visual_feats=None, pos=None, obj_labels=None, matched_label=None, ans=None
-
-                #the input from the sample
-
-                # uid, sent, (feats, boxes),
-                # (obj_labels, obj_confs), (attr_labels, attr_confs),
-                # is_matched, label
-
-                self.uid = uid
-                self.sent = sent
-                self.visual_feats = visual_feats
-                self.obj_labels = obj_labels
-                self.attr_labels = attr_labels
-                self.is_matched = is_matched  # whether the visual and obj matched
-                self.label = label
-
 
                 report = self._forward_pass(batch)
                 loss = self._extract_loss(report)

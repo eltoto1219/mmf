@@ -21,7 +21,6 @@ Follow installation instructions in the [documentation](https://mmf.readthedocs.
 To pretrain LXMERT model on the VQA2.0 dataset, run the following command
 
 ```
-<<<<<<< HEAD
 mmf_run config=projects/lxmert/configs/masked_vqa2/pretrain.yaml run_type=train_val dataset=masked_vqa2 model=lxmert
 ```
 
@@ -30,9 +29,6 @@ To pretrain LXMERT model on the VQA2.0, GQA, Visual Genome, and COCO datasets, r
 
 ```
 mmf_run config=projects/lxmert/configs/pretrain/pretrain.yaml run_type=train_val datasets=masked_vqa2,masked_gqa,masked_coco,visual_genome model=lxmert
-=======
-mmf_run config=projects/lxmert/configs/vqa2/pretrain.yaml run_type=train_val dataset=vqa2 model=lxmert
->>>>>>> finalize configs + more temp model changes for new input data
 ```
 
 ## Finetuning

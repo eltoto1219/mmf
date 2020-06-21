@@ -26,6 +26,7 @@ from mmf.utils.early_stopping import EarlyStopping
 from mmf.utils.general import clip_gradients, print_model_parameters
 from mmf.utils.logger import Logger, TensorboardLogger
 from mmf.utils.timer import Timer
+from mmf.utils.lxmert_data import get_tuple
 
 LXMERT_AUG = True
 TINY = True
@@ -36,6 +37,7 @@ WORKERS = 4
 PIN = True
 BS_TRAIN = 256
 BS_VAL = 512
+SHUFFLE= True
 SPLITS_VAL = "mscoco_minival"
 DROP_LAST = True
 QA_SETS = "vqa,gqa,visual7w"
@@ -44,11 +46,6 @@ if TINY:
     SPLITS_TRAIN = "mscoco_minival"
 else:
     SPLITS_TRAIN = "mscoco_train,mscoco_nominival,vgnococo"
-
-if LXMERT_AUG:
-    import sys
-    sys.path.append("/playpen/lxmert_loader")
-    from lxmert_data import get_tuple
 
 @registry.register_trainer("base_trainer")
 class BaseTrainer:
@@ -124,14 +121,19 @@ class BaseTrainer:
                     shuffle=SHUFFLE,
                     drop_last=DROP_LAST,
                     topk=-1,
-                    qa_sets=QA_SETS)
+                    qa_sets=QA_SETS,
+                    dataset_name = DATASET_NAME,
+                    dataset_type=TRAIN_NAME)
             valid_tuple = get_tuple(
-                    splits=SPLITS_TRAIN,
-                    bs=BS_TRAIN,
+                    splits=SPLITS_VAL,
+                    bs=BS_VAL,
                     shuffle=SHUFFLE,
                     drop_last=DROP_LAST,
                     topk=5000,
-                    qa_sets=QA_SETS)
+                    qa_sets=QA_SETS,
+                    dataset_name = DATASET_NAME,
+                    dataset_type=VALID_NAME)
+
 
             self.train_dataset = train_tuple.dataset
             self.val_dataset = valid_tuple.dataset
@@ -283,7 +285,10 @@ class BaseTrainer:
             registry.register("current_epoch", self.current_epoch)
 
             # Seed the sampler in case if it is distributed
-            self.dataset_loader.seed_sampler("train", self.current_epoch)
+            if not LXMERT_AUG:
+                self.dataset_loader.seed_sampler("train", self.current_epoch)
+            else:
+                self.train_dataset.seed_sampler(self.current_epoch)
 
             if self.current_epoch > self.max_epochs:
                 break

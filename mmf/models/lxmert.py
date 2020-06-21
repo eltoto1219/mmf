@@ -120,94 +120,9 @@ class InputFeatures(object):
         self.ans = ans
 
 
-class InputExample(object):
-    """A single training/test example for the language model."""
-    def __init__(self, uid, sent, visual_feats=None,
-                 obj_labels=None, attr_labels=None,
-                 is_matched=None, label=None):
-        self.uid = uid
-        self.sent = sent
-        self.visual_feats = visual_feats
-        self.obj_labels = obj_labels
-        self.attr_labels = attr_labels
-        self.is_matched = is_matched  # whether the visual and obj matched
-        self.label = label
-
-def convert_example_to_features(example: InputExample, max_seq_length, tokenizer)->InputFeatures:
-    """
-    Convert a raw sample (pair of sentences as tokenized strings) into a proper training sample with
-    IDs, LM labels, input_mask, CLS and SEP tokens etc.
-    :param example: InputExample, containing sentence input as strings and is_next label
-    :param max_seq_length: int, maximum length of sequence.
-    :param tokenizer: Tokenizer
-    :return: InputFeatures, containing all inputs and labels of one sample as IDs (as used for model training)
-    """
-    tokens = tokenizer.tokenize(example.sent.strip())
-
-    # Account for [CLS] and [SEP] with "- 2"
-    if len(tokens) > max_seq_length - 2:
-        tokens = tokens[:(max_seq_length - 2)]
-
-    # Ge random words
-    masked_tokens, masked_label = random_word(tokens, tokenizer)
-
-    # concatenate lm labels and account for CLS, SEP, SEP
-    masked_tokens = ['[CLS]'] + masked_tokens + ['[SEP]']
-    input_ids = tokenizer.convert_tokens_to_ids(masked_tokens)
-
-    # Mask & Segment Word
-    lm_label_ids = ([-1] + masked_label + [-1])
-    input_mask = [1] * len(input_ids)
-    segment_ids = [0] * len(input_ids)
-
-    # Zero-pad up to the sequence length.
-    while len(input_ids) < max_seq_length:
-        input_ids.append(0)
-        input_mask.append(0)
-        segment_ids.append(0)
-        lm_label_ids.append(-1)
-
-    assert len(input_ids) == max_seq_length
-    assert len(input_mask) == max_seq_length
-    assert len(segment_ids) == max_seq_length
-    assert len(lm_label_ids) == max_seq_length
-
-    feat, boxes = example.visual_feats
-    obj_labels, obj_confs = example.obj_labels
-    attr_labels, attr_confs = example.attr_labels
-
-    # Mask Image Features:
-    masked_feat, feat_mask = random_feat(feat)
+c    # Mask Image Features:
 
     # QA answer label
-    if example.label is None or len(example.label) == 0 or example.is_matched != 1:
-        # 1. No label 2. Label is pruned 3. unmatched visual + language pair
-        ans = -1
-    else:
-        keys, values = zip(*example.label.items())
-        if len(keys) == 1:
-            ans = keys[0]
-        else:
-            value_sum = sum(values)
-            prob = [value / value_sum for value in values]
-            choice = np.random.multinomial(1, prob).argmax()
-            ans = keys[choice]
-
-    features = InputFeatures(
-        input_ids=input_ids,
-        input_mask=input_mask,
-        segment_ids=segment_ids,
-        lm_label_ids=lm_label_ids,
-        visual_feats=(masked_feat, boxes),
-        obj_labels={
-            'obj': (obj_labels, obj_confs),
-            'attr': (attr_labels, attr_confs),
-            'feat': (feat, feat_mask),
-        },
-        is_matched=example.is_matched,
-        ans=ans,
-    )
-    return features
 
 
 def gelu(x):
@@ -1024,15 +939,6 @@ class LXMERT(BaseModel):
         if cls_prob is not None:
             cls_prob = torch.tensor(cls_prob).cuda()
 
-        is_matched = 1
-        if self.config.task_matched:
-            if random.random() < 0.5:
-                is_matched = 0
-                ssf = torch.randperm(bert_input_ids.size(0))
-                bert_input_ids = bert_input_ids[ssf]
-                bert_input_mask = bert_input_mask[ssf]
-                bert_input_type_ids = bert_input_type_ids[ssf]
-                masked_lm_labels = masked_lm_labels[ssf]
         answers = sample_list.targets
 
         return {
@@ -1053,50 +959,21 @@ class LXMERT(BaseModel):
         return get_optimizer_parameters_for_bert(self.model, config)
 
     def forward(self, sample_list):
-        if getattr(sample_list, "lxmert_aug", False):
-            params = self.get_image_and_text_features(sample_list)
-            if params["visual_feats"] is not None and params["image_dim"] is not None:
-                image_mask = (
-                    torch.arange(params["visual_feats"].size(-2))
-                    .expand(*params["visual_feats"].size()[:-1])
-                    .cuda()
-                )
-                if len(params["image_dim"].size()) < len(image_mask.size()):
-                    params["image_dim"] = params["image_dim"].unsqueeze(-1)
-                    assert len(params["image_dim"].size()) == len(image_mask.size())
-                image_mask = image_mask < params["image_dim"]
-                params["image_attention_mask"] = image_mask.long()
-            else:
-                params["image_attention_mask"] = None
-            params.pop("image_dim")
+        params = self.get_image_and_text_features(sample_list)
+        if params["visual_feats"] is not None and params["image_dim"] is not None:
+            image_mask = (
+                torch.arange(params["visual_feats"].size(-2))
+                .expand(*params["visual_feats"].size()[:-1])
+                .cuda()
+            )
+            if len(params["image_dim"].size()) < len(image_mask.size()):
+                params["image_dim"] = params["image_dim"].unsqueeze(-1)
+                assert len(params["image_dim"].size()) == len(image_mask.size())
+            image_mask = image_mask < params["image_dim"]
+            params["image_attention_mask"] = image_mask.long()
         else:
-            params = {}
-            train_features = [convert_example_to_features(example, self.max_seq_length, self.tokenizer)
-                for example in examples]
-            # language Inputs
-            params['input_ids'] = torch.tensor([f.input_ids for f in train_features], dtype=torch.long).cuda()
-            params["token_type_ids"] = segment_ids = torch.tensor([f.segment_ids for f in train_features], dtype=torch.long).cuda()
-            params['attention_mask'] = torch.tensor([f.input_mask for f in train_features], dtype=torch.long).cuda()
-            # Visual Inputs
-            params["visual_feat"] = feats = torch.from_numpy(np.stack([f.visual_feats[0] for f in train_features])).cuda()
-            params["pos"] = torch.from_numpy(np.stack([f.visual_feats[1] for f in train_features])).cuda()
             params["image_attention_mask"] = None
-            # Language Prediction
-            params["masked_lm_labels"] = torch.tensor([f.lm_label_ids for f in train_features], dtype=torch.long).cuda()
-            # Visual Prediction
-            obj_labels = {}
-            visn_labels = {}
-            for key in ('obj', 'attr', 'feat'):
-                visn_labels = torch.from_numpy(np.stack([f.obj_labels[key][0] for f in train_features])).cuda()
-                visn_mask = torch.from_numpy(np.stack([f.obj_labels[key][1] for f in train_features])).cuda()
-                assert visn_labels.size(0) == visn_mask.size(0) and visn_labels.size(1) == visn_mask.size(1)
-                obj_labels[key] = visn_labels
-                visn_labels[key] = visn_mask
-            # Joint Prediction
-            params["masked_image_labels"] = visn_labels
-            params["obj_labesl"] = obj_labels
-            params["matched_labels"] = torch.tensor([f.is_matched for f in train_features], dtype=torch.long).cuda()
-            params["ans"] = torch.from_numpy(np.stack([f.ans for f in train_features])).cuda()
+        params.pop("image_dim")
 
         if self.config.training_head_type == "pretraining":
             output_dict = self.model(

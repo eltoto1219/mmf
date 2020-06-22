@@ -39,91 +39,6 @@ from mmf.models import BaseModel
 from mmf.utils.configuration import get_mmf_cache_dir
 from mmf.utils.modeling import get_optimizer_parameters_for_bert
 
-def random_word(tokens, tokenizer):
-    """
-    Masking some random tokens for Language Model task with probabilities as in the original BERT paper.
-    :param tokens: list of str, tokenized sentence.
-    :param tokenizer: Tokenizer, object used for tokenization (we need it's vocab here)
-    :return: (list of str, list of int), masked tokens and related labels for LM prediction
-    """
-    output_label = []
-
-    for i, token in enumerate(tokens):
-        prob = random.random()
-        # mask token with probability
-        ratio = args.word_mask_rate
-        if prob < ratio:
-            prob /= ratio
-
-            # 80% randomly change token to mask token
-            if prob < 0.8:
-                tokens[i] = "[MASK]"
-
-            # 10% randomly change token to random token
-            elif prob < 0.9:
-                tokens[i] = random.choice(list(tokenizer.vocab.items()))[0]
-
-            # -> rest 10% randomly keep current token
-
-            # append current token to output (we will predict these later)
-            try:
-                output_label.append(tokenizer.vocab[token])
-            except KeyError:
-                # For unknown words (should not occur with BPE vocab)
-                output_label.append(tokenizer.vocab["[UNK]"])
-        else:
-            # no masking token (will be ignored by loss function later)
-            output_label.append(-1)
-
-    return tokens, output_label
-
-def random_feat(feats):
-    mask_feats = feats.copy()
-    feat_mask = np.zeros(len(feats), dtype=np.float32)
-    for i in range(len(feats)):
-        prob = random.random()
-        # mask token with probability
-        if prob < args.obj_mask_rate:
-            prob /= args.obj_mask_rate
-
-            # 80% randomly change token to zero feat
-            if prob < 0.8:
-                mask_feats[i, :] = 0.
-
-            # 10% randomly change token to random feat
-            elif prob < 0.9:
-                mask_feats[i, :] = train_tuple.torchdset.random_feat()
-            # -> rest 10% randomly keep current feat
-
-            # Need to predict this feat
-            feat_mask[i] = 1.
-
-    return mask_feats, feat_mask
-
-class InputFeatures(object):
-    """A single set of features of data."""
-
-    def __init__(self,
-                 input_ids, input_mask, segment_ids, lm_label_ids,
-                 visual_feats, obj_labels,
-                 is_matched, ans):
-        self.input_ids = input_ids
-        self.input_mask = input_mask
-        self.segment_ids = segment_ids
-        self.lm_label_ids = lm_label_ids
-
-        self.visual_feats = visual_feats
-        self.obj_labels = obj_labels
-
-        self.is_matched = is_matched
-
-        self.ans = ans
-
-
-c    # Mask Image Features:
-
-    # QA answer label
-
 
 def gelu(x):
 
@@ -207,7 +122,6 @@ class BertAttention(nn.Module):
         self.query = nn.Linear(config.hidden_size, self.all_head_size)
         self.key = nn.Linear(ctx_dim, self.all_head_size)
         self.value = nn.Linear(ctx_dim, self.all_head_size)
-
         self.dropout = nn.Dropout(config.attention_probs_dropout_prob)
 
     def transpose_for_scores(self, x):
@@ -247,6 +161,7 @@ class BertAttention(nn.Module):
         context_layer = context_layer.permute(0, 2, 1, 3).contiguous()
         new_context_layer_shape = context_layer.size()[:-2] + (self.all_head_size,)
         context_layer = context_layer.view(*new_context_layer_shape)
+
         return context_layer
 
 
@@ -738,7 +653,6 @@ class LXMERTForPretraining(nn.Module):
         else:
             answer_score = pooled_output[0][0]
 
-
         if masked_lm_labels is not None and self.task_mask_lm:
             masked_lm_loss = self.loss_fct(
                 lang_prediction_scores.view(-1, lang_prediction_scores.size(-1)),
@@ -746,9 +660,11 @@ class LXMERTForPretraining(nn.Module):
             )
             output["masked_lm_loss"] = masked_lm_loss
         if matched_label is not None and self.task_matched:
-            matched_label = torch.tensor(matched_label).repeat(cross_relationship_score.size(0)).to(cross_relationship_score).long()
+            #matched_label = torch.tensor(matched_label).repeat(
+            #    cross_relationship_score.size(-1)).to(cross_relationship_score).long()
+            #raise Exception(cross_relationship_score.shape, matched_label.shape)
             matched_loss = self.loss_fct(
-                cross_relationship_score.view(-1, 2), matched_label.view(-1)
+                cross_relationship_score.view(-1, 2), matched_label.view(-1).long()
             )
             output["matched_loss"] = matched_loss
         if obj_labels is not None and self.task_obj_predict:
@@ -779,17 +695,17 @@ class LXMERTForPretraining(nn.Module):
                 if visn_loss.dim() > 1:  # Regression Losses
                     visn_loss = visn_loss.mean(1)
                 visn_loss = (visn_loss * mask_conf.view(-1)).mean() * weight
-
                 total_visn_loss += visn_loss
+
             output["total_visn_loss"] = total_visn_loss
+
         if ans is not None and self.task_qa:
             answer_loss = self.loss_fct(
-                answer_score.view(-1, self.num_labels), ans.argmax(-1)
+                answer_score.view(-1, self.num_labels), ans.long()
             )
             output["answer_loss"] = answer_loss
 
         return output
-
 
 class LXMERTForClassification(nn.Module):
     def __init__(self, config, mode="lxr"):
@@ -891,58 +807,66 @@ class LXMERT(BaseModel):
                 p.requires_grad = False
 
     def get_image_and_text_features(self, sample_list):
-        # i added back some original code from VilBERT, not sure how much you changed
-        # I only did so to keep  everything compatabile for the downstream forward
-        # pass defined below
-        # if we run into troubles for nlvr2, we can add back the other stuff
-        # IMPORTANT: if we end up looking for answer to question, it may be in
-        # the sample list
         bert_input_ids = sample_list.input_ids
         bert_input_mask = sample_list.input_mask
         bert_input_type_ids = sample_list.segment_ids
         masked_lm_labels = sample_list.lm_label_ids
+        ###
+        lxmert_aug = getattr(sample_list, "lxmert_custom", None)
+        if lxmert_aug is None:
+            image_info = getattr(sample_list, "image_info_0", {})
+            image_info = getattr(sample_list, "image_info_0", {})
+            image_dim_variable = getattr(image_info, "max_features", None)
+            image_feature_variable = getattr(sample_list, "image_feature_0", None)
+            image_label_variable = getattr(sample_list, "image_labels", None)
+            if image_label_variable is not None:
+                image_label_variable = torch.tensor(
+                    image_label_variable, dtype=torch.long
+                ).cuda()
 
-        ####
-
-        image_info = getattr(sample_list, "image_info_0", {})
-#         image_info.momoda
-        image_dim_variable = getattr(image_info, "max_features", None)
-
-        image_feature_variable = getattr(sample_list, "image_feature_0", None)
-        image_label_variable = getattr(sample_list, "image_labels", None)
-        if image_label_variable is not None:
-            image_label_variable = torch.tensor(
-                image_label_variable, dtype=torch.long
+            # may want to check shape of bbox here -> may be source of error later
+            bbox = np.array(getattr(image_info, "bbox", None), dtype=np.float32)
+            image_w = np.array(
+                getattr(image_info, "image_width", None), dtype=np.float32
+            )
+            image_h = np.array(
+                getattr(image_info, "image_height", None), dtype=np.float32
+            )
+            image_location = np.zeros(
+                (bbox.shape[0], bbox.shape[1], 4), dtype=np.float32
+            )
+            image_location[:, :, :4] = bbox
+            image_location[:, :, 0] = image_location[:, :, 0] / image_w[:, None]
+            image_location[:, :, 1] = image_location[:, :, 1] / image_h[:, None]
+            image_location[:, :, 2] = image_location[:, :, 2] / image_w[:, None]
+            image_location[:, :, 3] = image_location[:, :, 3] / image_h[:, None]
+            image_location_variable = torch.tensor(
+                image_location, dtype=torch.float
             ).cuda()
+            answers = getattr(sample_list, "targets", None)
+            cls_prob = getattr(image_info, "cls_prob", None)
+            if cls_prob is not None:
+                cls_prob = torch.tensor(cls_prob).cuda()
+        else:
+            image_dim_variable = getattr(sample_list, "max_features", None)
+            image_feature_variable = getattr(sample_list, "image_feature_0", None)
+            image_label_variable = getattr(sample_list, "image_labels", None)
+            bbox = getattr(sample_list, "bbox", None)
+            image_w = getattr(sample_list, "image_width", None)
+            image_h = getattr(sample_list, "image_height", None)
+            image_location = torch.zeros(*bbox.shape)
+            image_location[:, :, :4] = bbox
+            image_location[:, :, 0] = image_location[:, :, 0] / image_w[:, None]
+            image_location[:, :, 1] = image_location[:, :, 1] / image_h[:, None]
+            image_location[:, :, 2] = image_location[:, :, 2] / image_w[:, None]
+            image_location[:, :, 3] = image_location[:, :, 3] / image_h[:, None]
+            image_location_variable = torch.tensor(image_location, dtype=torch.float)
+            cls_prob = getattr(sample_list, "cls_prob", None)
+            answers = getattr(sample_list, "targets", None)
+            is_matched = getattr(sample_list, "is_matched", None)
 
-        # may want to check shape of bbox here -> may be source of error later
-        bbox = np.array(getattr(image_info, "bbox", None), dtype=np.float32)
-        image_w = np.array(
-            getattr(image_info, "image_width", None), dtype=np.float32
-        )
-        image_h = np.array(
-            getattr(image_info, "image_height", None), dtype=np.float32
-        )
-        image_location = np.zeros(
-            (bbox.shape[0], bbox.shape[1], 4), dtype=np.float32
-        )
-        image_location[:, :, :4] = bbox
-        image_location[:, :, 0] = image_location[:, :, 0] / image_w[:, None]
-        image_location[:, :, 1] = image_location[:, :, 1] / image_h[:, None]
-        image_location[:, :, 2] = image_location[:, :, 2] / image_w[:, None]
-        image_location[:, :, 3] = image_location[:, :, 3] / image_h[:, None]
-        image_location_variable = torch.tensor(
-            image_location, dtype=torch.float
-        ).cuda()
-
-        cls_prob = getattr(image_info, "cls_prob", None)
-        if cls_prob is not None:
-            cls_prob = torch.tensor(cls_prob).cuda()
-
-        answers = sample_list.targets
-
-        return {
-            "input_ids": bert_input_ids,
+        output = {
+            "input_ids": bert_input_ids.cuda(),
             "token_type_ids": bert_input_mask,
             "attention_mask": bert_input_type_ids,
             "masked_lm_labels": masked_lm_labels,
@@ -954,6 +878,12 @@ class LXMERT(BaseModel):
             "ans": answers,
             "image_dim": image_dim_variable
         }
+
+        for k in output:
+            if output[k] is not None:
+                output[k] = output.pop(k).cuda()
+
+        return output
 
     def get_optimizer_parameters(self, config):
         return get_optimizer_parameters_for_bert(self.model, config)
@@ -991,7 +921,7 @@ class LXMERT(BaseModel):
             )
 
             loss_key = "{}/{}".format(
-                sample_list.dataset_name, sample_list.dataset_type
+                "lxmert", "vqa2"
             )
             output_dict["losses"] = {}
             if "masked_lm_loss" in output_dict.keys():
@@ -1019,4 +949,5 @@ class LXMERT(BaseModel):
                 visual_pos=params["pos"],
                 visual_attention_mask=params["image_attention_mask"],
             )
+
         return output_dict

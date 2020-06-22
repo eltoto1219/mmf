@@ -122,7 +122,7 @@ class MaskedTokenProcessor(BaseProcessor):
 
     def __call__(self, item):
         text_a = item["text_a"]
-        text_b = item.get("text_b", None)
+        text_b = item.get("text_b", False)
 
         tokens_a = self._tokenizer.tokenize(text_a)
         tokens_b = None

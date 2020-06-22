@@ -3,6 +3,9 @@
 
 from collections import defaultdict
 from collections import namedtuple
+import warnings
+from collections import OrderedDict
+from copy import deepcopy
 import json
 import random
 import torch
@@ -36,6 +39,81 @@ csv.field_size_limit(sys.maxsize)
 FIELDNAMES = ["img_id", "img_h", "img_w", "objects_id", "objects_conf",
               "attrs_id", "attrs_conf", "num_boxes", "boxes", "features"]
 
+class Report2(OrderedDict):
+    def __init__(self, batch_size, model_output=None, *args):
+        super().__init__(self)
+        if model_output is None:
+            model_output = {}
+
+        all_args = [model_output] + [*args]
+        self.writer = registry.get("writer")
+        self.batch_size = batch_size
+        self.warning_string = (
+            "Updating forward report with key {}"
+            "{}, but it already exists in {}. "
+            "Please consider using a different key, "
+            "as this can cause issues during loss and "
+            "metric calculations."
+        )
+
+        for idx, arg in enumerate(all_args):
+            for key, item in arg.items():
+                if key in self and idx >= 2:
+                    log = self.warning_string.format(
+                        key, "", "in previous arguments to report"
+                    )
+                    warnings.warn(log)
+
+                if type(item) == torch.Tensor:
+                    item = torch.cat((self[key], report[key]), dim=0)
+                self[key] = item
+
+    def __setattr__(self, key, value):
+        self[key] = value
+
+    def __getattr__(self, key):
+        try:
+            return self[key]
+        except KeyError:
+            raise AttributeError(key)
+
+    def fields(self):
+        return list(self.keys())
+
+class CustomBatch:
+    def __init__(self, data):
+        assert type(data) == list, "{}".format(data[0])
+        for k, v in data[0].items():
+            assert type(v) is torch.Tensor,"{}".format(v, k)
+        keys = list(deepcopy(data[0]).keys())
+        values = list(
+                map(
+                    torch.stack,
+                    list(
+                        zip(
+                            *tuple(
+                                map(
+                                    lambda a: list(a.values())
+                                    , data)
+                                )
+                            )
+                        )
+                    )
+                )
+        for k, v in zip(keys, values):
+            assert type(v) == torch.Tensor
+            setattr(self, k, v)
+
+    def pin_memory(self):
+        torch_attrs = list(filter(lambda x: "__" not in x and "pin_memory" not in x, dir(self)))
+        for n in torch_attrs:
+            a = getattr(self, n)
+            setattr(self, n, a.pin_memory())
+        return self
+
+def collate_wrapper(batch):
+    return CustomBatch(batch)
+
 def load_obj_tsv(fname, topk=None):
     """Load object features from tsv file.
 
@@ -47,7 +125,6 @@ def load_obj_tsv(fname, topk=None):
     """
     data = []
     start_time = time.time()
-    print("Start to load Faster-RCNN detected objects from %s" % fname)
     with open(fname) as f:
         reader = csv.DictReader(f, FIELDNAMES, delimiter="\t")
         for i, item in enumerate(reader):
@@ -73,7 +150,6 @@ def load_obj_tsv(fname, topk=None):
             if topk is not None and len(data) == topk:
                 break
     elapsed_time = time.time() - start_time
-    print("Loaded %d images in file %s in %d seconds." % (len(data), fname, elapsed_time))
     return data
 
 
@@ -175,17 +251,17 @@ def build_dataloader_and_sampler(
     loader = torch.utils.data.DataLoader(
         dataset=dataset_instance,
         pin_memory=pin_memory,
-        collate_fn=BatchCollator(
-            dataset_instance.dataset_name, dataset_instance.dataset_type),
-        num_workers=num_workers,
+        collate_fn=collate_wrapper,
+        #BatchCollator(
+        #    dataset_instance.dataset_name, dataset_instance.dataset_type),
+        num_workers=1,
         **other_args,
     )
 
     if num_workers >= 0:
         # Suppress leaking semaphore warning
         os.environ["PYTHONWARNINGS"] = "ignore:semaphore_tracker:UserWarning"
-    loader.dataset_type = dataset_instance.dataset_type
-    return loader, other_args.get("sampler", None)
+    return loader
 
 
 class LXMERTDataset:
@@ -201,14 +277,11 @@ class LXMERTDataset:
 
         # Loading datasets to data
         self.data = []
-        self._samplers = []
         for source in self.sources:
             self.data.extend(json.load(open("/playpen2/lxmert_data/data/lxmert/%s.json" % source)))
-        print("Load %d data from %s" % (len(self.data), self.name))
 
         # Create answer table according to the qa_sets
         self.answer_table = AnswerTable(qa_sets)
-        print("Load an answer table of size %d." % (len(self.answer_table.ans2id_map())))
 
         # Modify the answers
         for datum in self.data:
@@ -232,16 +305,32 @@ class LXMERTDataset:
 # NORMAL
 class LXMERTTorchDataset(MMFDataset):
 
-    def __init__(self, dataset, dataset_name, dataset_type, topk=-1, config):
-
-        super().__init__()
+    def __init__(self, dataset, dataset_name, dataset_type, topk, config):
+        #super().__init__(dataset_name, config)
         self._dataset_name = dataset_name
         self._dataset_type = dataset_type
         self.raw_dataset = dataset
         self.task_matched = True
         self._add_answer = config.get("add_answer", True)
         self.config = config
-        #self.masked_token_processor = MaskedTokenProcessor(config)
+        #tokener congig
+
+        CO =  namedtuple('config', "tokenizer_config max_seq_length")
+        TC = namedtuple("tokenizer_config", "type use_lower_case params")
+        c = CO(TC("bert-base-uncased", True, {}), 20)
+
+        self.masked_token_processor = MaskedTokenProcessor(c)
+
+        self.writer = registry.get("writer")
+        self._global_config = registry.get("config")
+        self._dataset_type = dataset_type
+        self._dataset_name=dataset_name
+        self._is_master = is_master()
+
+        self._num_datasets = 1
+        self._dataset_probablities = 1
+        training = self._global_config.training
+        self._dataset_probablities =  1
 
         if True:
             topk = TINY_IMG_NUM
@@ -282,119 +371,130 @@ class LXMERTTorchDataset(MMFDataset):
                         new_datum['label'] = labels[sent_idx]
                     self.data.append(new_datum)
 
+    def make_uid(self, img_id, dset, sent_idx):
+        return "%s_%s_%03d" % (img_id, dset, sent_idx)
+
     def _add_masked_question(self, sample_info, current_sample):
         question = sample_info["sent"]
-        if sample_info["label"] is None or sample["label"] == 0\
-                or sample_info["is_matched"] != 1:
-            # 1. No label 2. Label is pruned 3. unmatched visual + language pair
-            ans = -1
-        else:
-            keys, values = zip(*example.label.items())
-            if len(keys) == 1:
-                ans = keys[0]
-            else:
-                value_sum = sum(values)
-                prob = [value / value_sum for value in values]
-                choice = np.random.multinomial(1, prob).argmax()
-                ans = keys[choice]
-        if ans == -1
-            p_arg = {"text_a": question, "text_b": None, "is_correct": -1}
-        else:
-            p_arg = {"text_a": question, "text_b": ans, "is_correct": 1}
-
+        p_arg = {"text_a": question, "text_b": None, "is_correct": -1}
         processed = self.masked_token_processor(p_arg)
         processed.pop("tokens")
-        current_sample.update(processed)
+        current_sample = {**current_sample, **processed}
+        return current_sample
 
     def process_lxmert_datum(self, sample_info, sample):
-        sample.image_id = object_to_byte_tensor(sample_info["image_id"])
+        #sample.image_id = torch.tensor(
+        #    int(sample_info["img_id"]), dtype=torch.int
+        #    )
 
-        current_sample.img_info_0 = {
-                "max_features": torch.tensor(36, dtype = torch.long),
-                "bbox": torch.from_numpy(sample_info["boxes"]).cuda()
-                "image_width": torch.tensor(sample_info['img_h'], dtype=torch.long ),
-                "image_height": torch.tensor(sample_info['img_w'], dtype=torch.long),
-                "cls_prob": torch.tensor(sample_info["obects_id"])}
+        obj_labels = torch.from_numpy(sample_info["objects_id"])
+        obj_conf = torch.from_numpy(sample_info["objects_conf"])
+        #attr_labels = torch.from_numpy(sample_info["attrs_id"]).long()
+        #attr_conf = torch.from_numpy(sample_info["attrs_conf"]).float()
 
-        features = Sample({
-            "image_feature_0":torch.from_numpy(sample_info["features"]).cuda()})
-        current_sample.img0 = features
+        placeholder = torch.zeros(1, 36, 1600)
+        for i in range(0, 36):
+            placeholder[0][i][int(obj_labels[i])] = obj_conf[i]
+
+        sample["cls_prob"] = placeholder
+        sample["max_features"] = torch.tensor(36, dtype = torch.int)
+        sample["image_width"] = torch.tensor(sample_info['img_w'], dtype=torch.int)
+        sample["image_height"] = torch.tensor(sample_info['img_h'], dtype=torch.int)
+        sample["bbox"] = torch.from_numpy(sample_info["boxes"])
+        sample["image_feature_0"] = torch.from_numpy(sample_info["features"])
+        sample["lxmert_custom"] = torch.tensor(1, dtype=torch.int)
+
+
+        #sample.img_info_0 = {
+        #        "max_features": torch.tensor(36, dtype = torch.int),
+        #        "bbox": torch.from_numpy(sample_info["boxes"]),
+        #        "image_width": torch.tensor(sample_info['img_h'], dtype=torch.int),
+        #        "image_height": torch.tensor(sample_info['img_w'], dtype=torch.int),
+        #        "cls_prob": placeholder}
+
+        #features = Sample({
+        #    "image_feature_0":torch.from_numpy(sample_info["features"])})
+        #sample.img0 = features
 
         #feature mask(15%)
         image_labels = []
-        for i in range(features["image_feature_0"].shape[0]):
+        for i in range(sample["image_feature_0"].shape[0]):
             prob = random.random()
             if prob < 0.15:
                 if prob < 0.9:
-                    features["image_feature_0"][i] = 0
+                    sample["image_feature_0"][i] = 0
                 image_labels.append(1)
             else:
                 # no masking token (will be ignored by loss function later)
                 image_labels.append(-1)
-        item = {}
-        item["image_labels"] = image_labels
-        sample.update(item)
+
+        sample["image_labels"] = torch.Tensor(image_labels)
+        #sample.update(item)
 
         #object mask
-
+        img_id = sample_info["img_id"]
         is_matched = 1
         if random.random() < 0.5:
             is_matched = 0
             other_datum = self.data[random.randint(0, len(self.data)-1)]
             while other_datum['img_id'] == img_id:
                 other_datum = self.data[random.randint(0, len(self.data)-1)]
-            sample["sent"] = other_datum['sent']
-        sample.is_matched = torch.tensor(is_matched, dtype=torch.long)
+            sample_info["sent"] = other_datum['sent']
+        #sample.is_matched = torch.tensor(is_matched, dtype=torch.int)
+        sample["is_matched"] = torch.tensor(is_matched, dtype=torch.int)
+        sample = self._add_masked_question(sample_info, sample)
 
-        #Hao multiplies by the conifidence and also uses attribute_ids
 
-        # answers will be included here
-        if 'label' not in sample_info:
-            sample_info["label"] = 0
-        sample = self._add_masked_question(sample_info, current_sample)
+        #answer
+        if sample_info["label"] is None or sample_info["label"] == 0\
+                or int(sample["is_matched"]) != 1\
+                or len(sample_info["label"]) < 1:
+            # 1. No label 2. Label is pruned 3. unmatched visual + language pair
+            ans = -1
+        else:
+            assert len(sample_info["label"]) >= 1
+            keys, values = zip(*iter(sample_info["label"].items()))
+            #if len(keys) == 1:
+            #    ans = keys[0]
+            #else:
+            #    value_sum = sum(values)
+            #    prob = [value / value_sum for value in values]
+            #    choice = np.random.multinomial(1, prob).argmax()
+            #    ans = keys[choice]
+            #keys = list(sample_info["label"].keys())
+            #values = list(sample_info["label"].values())
+            if len(keys) == 1:
+                ans = keys[0]
+            else:
+                value_sum = sum(values)
+                prob = [value / value_sum for value in values]
+                choice = int(np.random.choice(
+                    list(range(0,len(keys))), size = 1, p = prob))
+                ans = keys[choice]
 
-        # extras
-        if not self.use_ocr:
-            # remove all OCRs from the sample
-            # (i.e. make an empty OCR list)
-            sample_info["ocr_tokens"] = []
-            sample_info["ocr_info"] = []
-            if "ocr_normalized_boxes" in sample_info:
-                sample_info["ocr_normalized_boxes"] = np.zeros((0, 4), np.float32)
-            # clear OCR visual features
-            #if "image_feature_1" in sample:
-            #    sample.image_feature_1 = torch.zeros_like(sample.image_feature_1)
-            #return sample
-
-        # Get PHOC embeddings for OCR tokens
-        if hasattr(self, "phoc_processor"):
-            context_phoc = self.phoc_processor({"tokens": ocr_tokens})
-            sample.context_feature_1 = context_phoc["text"]
-            sample.context_info_1 = Sample()
-            sample.context_info_1.max_features = context_phoc["length"]
-
-        # OCR order vectors
-        if self.config.get("use_order_vectors", False):
-            order_vectors = np.eye(len(sample.ocr_tokens), dtype=np.float32)
-            order_vectors = torch.from_numpy(order_vectors)
-            order_vectors[context["length"] :] = 0
-            sample.order_vectors = order_vectors
-
-         elif self.use_ocr_info and "ocr_info" in sample_info:
-            # Old imdb format: OCR bounding boxes are computed on-the-fly
-            # from ocr_info
-            sample.ocr_bbox_coordinates = self.bbox_processor(
-                {"info": sample_info["ocr_info"]}
-            )["bbox"].coordinates
-
-        current_sample = self._add_masked_question(sample_info, current_sample)
+        sample["targets"] = torch.tensor(ans, dtype=torch.int)
 
         return sample
 
+    def __len__(self):
+        return len(self.data)
+
     def __getitem__(self, item: int):
-        current_sample = Sample()
+
         datum = self.data[item]
+        img_id = datum["img_id"]
+
+        if 'label' in datum:
+            new_label = {}
+            label = datum['label'].copy()
+            for ans in list(label.keys()):
+                new_label[self.raw_dataset.answer_table.ans2id(ans)] = label.pop(ans)
+        else:
+            new_label = None
+        datum["label"] = new_label
         img_info = self.imgid2img[img_id]
+        datum["img_w"] = img_info["img_w"]
+        datum["img_h"] = img_info["img_h"]
         datum['num_boxes'] = img_info['num_boxes']
         datum['features'] = img_info['features'].copy()
         datum['boxes'] = img_info['boxes'].copy()
@@ -402,12 +502,11 @@ class LXMERTTorchDataset(MMFDataset):
         datum['objects_conf'] = img_info['objects_conf'].copy()
         datum['attrs_id'] = img_info['attrs_id'].copy()
         datum['attrs_conf'] = img_info['attrs_conf'].copy()
-        current_sample.uid = torch.tensor(
-            datum["uid"], dtype=torch.int
-        )
-        datum.pop("uid")
+
+        current_sample = {}
         current_sample = self.process_lxmert_datum(datum, current_sample)
-        return sample
+
+        return current_sample
 
 # custom loader here
 class LXMERTDatasetLoader:
@@ -422,180 +521,65 @@ class LXMERTDatasetLoader:
         dataset_name="pretrain",
         dataset_type="train",
         pin_memory=True,
-        num_wokers=True):
+        num_workers=4):
 
-        self._dataset_type = dataset_type
-        self.dataset_name=dataset_name
-        self.writer = registry.get("writer")
-        self._global_config = registry.get("config")
-        self._is_master = is_master()
 
         if qa_sets is not None:
-            self.qa_sets = set(qa_set.lower().strip() for qa_set in qa_sets.split(",")
-
+            self.qa_sets = set(qa_set.lower().strip() for qa_set in qa_sets.split(","))
         self.topk=topk
         self.pin_memory = pin_memory
         self.num_workers=num_workers
         self.shuffle=shuffle
         self.drop_last=drop_last
+        self.splits=splits
+        self.bs=bs
 
-    def _process_datasets(self):
-        if "datasets" not in self.config:
-            self.writer.write(
-                "No datasets attribute present. Setting default to vqa2." "warning"
-            )
-            datasets = "vqa2"
-        else:
-            datasets = self.config.datasets
-
-        if type(datasets) == str:
-            datasets = list(map(lambda x: x.strip(), datasets.split(",")))
-
-        self._given_datasets = dataset
-
-    def load(self, config)
+        self._dataset_name = dataset_name
+        self._dataset_type = dataset_type
         self.config = config
-        self._datasets = []
-        self._loaders = []
-        self._samplers = []
-        self._iterators = []
 
-        self._total_length = 0
-        self._per_dataset_lengths = []
-        self._num_datasets = 0
-        self._finished_iterators = {}
-        self._used_once = {}
+    def load_datasets(self):
 
         dset = LXMERTDataset(self.splits, qa_sets=self.qa_sets)
-        dataset_instance = LXMERTTorchDataset(dataset: dset,
-            dataset_name,
-            dataset_type,
-            topk=-1, config)
+        dataset_instance = LXMERTTorchDataset(dset,
+            self._dataset_name,
+            self._dataset_type,
+            self.topk,
+            self.config)
 
-        loader_intance, sampler_instance = build_dataloader_and_sampler(dataset_instance,
-            num_wokers,pin_memory,bs,shuffle, drop_last)
+        self.train_dataset = dataset_instance
 
-        self._datasets.append(dataset_instance)
-        self._loaders.append(loader_instance)
-        self._samplers.append(sampler_instance)
+        loader_instance = build_dataloader_and_sampler(dataset_instance,
+            self.num_workers,self.pin_memory,self.bs,self.shuffle, self.drop_last)
 
-        self._num_datasets = 1
-        sefl._dataset_probablities = 1
-        training = self._global_config.training
+        # seed sampler used to be here
 
-        if self._dataset_type != "train":
-            self._proportional_sampling = True
+        self.train_loader = loader_instance
 
-        if self._proportional_sampling is True:
-            self._dataset_probablities =  1
+    @property
+    def dataset_config(self):
+        return self._dataset_config
 
-        self._loader_index = 0
-        self._chosen_dataset = self._datasets[self._loader_index]
-        self._chosen_loader = self._loaders[self._loader_index]
+    @dataset_config.setter
+    def dataset_config(self, config):
+        self._dataset_config = config
 
-    def __iter__(self):
-        if self._num_datasets == 1:
-            return iter(self._loaders[0])
+    def get_config(self):
+        return self._dataset_config
 
-        self._iterators = []
-        self._finished_iterators = {}
-        self._used_once = {}
+    def get_test_reporter(self, dataset_type):
+        dataset = getattr(self, f"{dataset_type}_dataset")
+        return TestReporter(dataset)
 
-        for loader in self._loaders:
-            self._iterators.append(iter(loader))
-
-        self._chosen_iterator = self._iterators[self._loader_index]
-
-        return self
-
-    def __next__(self):
-        try:
-            next_batch = next(self._chosen_iterator)
-        except StopIteration:
-            if (
-                self._proportional_sampling is True
-                or len(self._used_once) != self._num_datasets
-            ):
-                self._finished_iterators[self._loader_index] = 1
-
-                if len(self._finished_iterators) == self._num_datasets:
-                    raise
-                else:
-                    self.change_dataloader()
-                next_batch = next(self._chosen_iterator)
-            else:
-                raise
-
-        self._used_once[self._loader_index] = 1
-        return next_batch
-
-    def change_dataloader(self):
-        if self._num_datasets <= 1:
-            return
-        choice = 0
-
-        if self._is_master:
-            choice = np.random.choice(
-                self._num_datasets, 1, p=self._dataset_probablities
-            )[0]
-
-            while choice in self._finished_iterators:
-                choice = np.random.choice(
-                    self._num_datasets, 1, p=self._dataset_probablities
-                )[0]
-
-        choice = broadcast_scalar(choice, 0, device=registry.get("current_device"))
-        self._loader_index = choice
-        self._chosen_dataset = self._datasets[self._loader_index]
-        self._chosen_loader = self._loaders[self._loader_index]
-        self._chosen_iterator = self._iterators[self._loader_index]
-
-    def verbose_dump(self, *args, **kwargs):
-        self._chosen_dataset.verbose_dump(*args, **kwargs)
-
-    def prepare_batch(self, batch):
-        batch = self._chosen_dataset.prepare_batch(batch)
-        self.change_dataloader()
+    def prepare_batch(self, batch, *args, **kwargs):
+        #batch = SampleList(batch)
+        #return self.mapping[batch.dataset_type].prepare_batch(batch)
         return batch
 
-    def update_registry_for_model(self, config):
-        """
-        Use this if there is some specific configuration required by model
-        which must be inferred at runtime.
-        """
-        for builder in self._builders:
-            builder.update_registry_for_model(config)
+    def verbose_dump(self, report, *args, **kwargs):
+        if self.config.training.verbose_dump:
+            dataset_type = report.dataset_type
+            self.mapping[dataset_type].verbose_dump(report, *args, **kwargs)
 
-    def clean_config(self, config):
-        """
-        Override this in case you want to clean the config you updated earlier
-        in update_registry_for_model
-        """
-        return config
-
-    def seed_sampler(self, epoch):
-        if torch.distributed.is_initialized():
-            for sampler in self._samplers:
-                assert hasattr(
-                    sampler, "set_epoch"
-                ), "Can't seed without `set_epoch` method"
-                sampler.set_epoch(epoch)
-
-    @property
-    def dataset_type(self):
-        return self._dataset_type
-
-    @property
-    def current_dataset_name(self):
-        return self._chosen_dataset.name
-
-    @property
-    def num_datasets(self):
-        return self._num_datasets
-
-    def get_datasets(self):
-        return self._datasets
-
-    @property
-    def first_loader(self):
-        return self._loaders[0]
+    def seed_sampler(self, dataset_type, seed):
+        pass

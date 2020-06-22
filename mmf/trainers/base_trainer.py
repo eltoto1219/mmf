@@ -26,21 +26,21 @@ from mmf.utils.early_stopping import EarlyStopping
 from mmf.utils.general import clip_gradients, print_model_parameters
 from mmf.utils.logger import Logger, TensorboardLogger
 from mmf.utils.timer import Timer
-from mmf.utils.lxmert_data import get_tuple
+from mmf.utils.lxmert_data import LXMERTDatasetLoader, Report2
 
 LXMERT_AUG = True
 TINY = True
 DATASET_NAME = "pretrain"
 TRAIN_NAME = "train"
-VALID_NAME = "valid"
-WORKERS = 4
-PIN = True
-BS_TRAIN = 256
-BS_VAL = 512
-SHUFFLE= True
-SPLITS_VAL = "mscoco_minival"
-DROP_LAST = True
-QA_SETS = "vqa,gqa,visual7w"
+# VALID_NAME = "valid"
+# WORKERS = 4
+# PIN = True
+BS = 64
+# BS_VAL = 512
+# SHUFFLE= True
+# SPLITS_VAL = "mscoco_minival"
+# DROP_LAST = True
+# QA_SETS = "vqa,gqa,visual7w"
 
 if TINY:
     SPLITS_TRAIN = "mscoco_minival"
@@ -56,11 +56,25 @@ class BaseTrainer:
 
     def load(self):
         self._set_device()
-
         self.run_type = self.config.get("run_type", "train")
+
         if not LXMERT_AUG:
             self.dataset_loader = DatasetLoader(self.config)
-            self._datasets = self.config.datasets
+        else:
+            self.dataset_loader = LXMERTDatasetLoader(
+            config = self.config,
+            splits = SPLITS_TRAIN,
+            bs = BS,
+            shuffle=True,
+            drop_last=False,
+            topk=-1,
+            qa_sets="vqa,gqa,visual7w",
+            dataset_name="pretrain",
+            dataset_type="train",
+            pin_memory=True,
+            num_workers=4)
+
+        self._datasets = self.config.datasets
 
         # Check if loader is already defined, else init it
         writer = registry.get("writer", no_warning=True)
@@ -98,50 +112,19 @@ class BaseTrainer:
         registry.register("current_device", self.device)
 
     def load_datasets(self):
+        self.writer.write("Loading datasets", "info")
+        self.dataset_loader.load_datasets()
+        self.train_dataset = self.dataset_loader.train_dataset
         if not LXMERT_AUG:
-            self.writer.write("Loading datasets", "info")
-            self.dataset_loader.load_datasets()
-            self.train_dataset = self.dataset_loader.train_dataset
             self.val_dataset = self.dataset_loader.val_dataset
-
-            # Total iterations for snapshot
-            self.snapshot_iterations = len(self.val_dataset)
-            self.snapshot_iterations //= self.config.training.batch_size
-
             self.test_dataset = self.dataset_loader.test_dataset
-
-            self.train_loader = self.dataset_loader.train_loader
             self.val_loader = self.dataset_loader.val_loader
             self.test_loader = self.dataset_loader.test_loader
-        else:
-            # try with tiny first
-            train_tuple = get_tuple(
-                    splits=SPLITS_TRAIN,
-                    bs=BS_TRAIN,
-                    shuffle=SHUFFLE,
-                    drop_last=DROP_LAST,
-                    topk=-1,
-                    qa_sets=QA_SETS,
-                    dataset_name = DATASET_NAME,
-                    dataset_type=TRAIN_NAME)
-            valid_tuple = get_tuple(
-                    splits=SPLITS_VAL,
-                    bs=BS_VAL,
-                    shuffle=SHUFFLE,
-                    drop_last=DROP_LAST,
-                    topk=5000,
-                    qa_sets=QA_SETS,
-                    dataset_name = DATASET_NAME,
-                    dataset_type=VALID_NAME)
 
-
-            self.train_dataset = train_tuple.dataset
-            self.val_dataset = valid_tuple.dataset
-            self.train_loader = train_tuple.loader
-            self.val_loader = valid_tuple.loader
-
-            self.snapshot_iterations = len(self.val_dataset)
-            self.snapshot_iterations //= self.config.training.batch_size
+        # Total iterations for snapshot
+        self.snapshot_iterations = len(self.train_dataset)
+        self.snapshot_iterations //= self.config.training.batch_size
+        self.train_loader = self.dataset_loader.train_loader
 
     def load_metrics(self):
         metrics = self.config.evaluation.get("metrics", [])
@@ -285,17 +268,12 @@ class BaseTrainer:
             registry.register("current_epoch", self.current_epoch)
 
             # Seed the sampler in case if it is distributed
-            if not LXMERT_AUG:
-                self.dataset_loader.seed_sampler("train", self.current_epoch)
-            else:
-                self.train_dataset.seed_sampler(self.current_epoch)
+            self.dataset_loader.seed_sampler("train", self.current_epoch)
 
             if self.current_epoch > self.max_epochs:
                 break
 
             for batch in self.train_loader:
-                if LXMERT_AUG:
-                    batch.lxmert_aug = True
                 self.profile("Batch load time")
                 self.current_iteration += 1
                 self.writer.write(self.num_updates + 1, "debug")
@@ -324,7 +302,11 @@ class BaseTrainer:
         self.profile("Batch prepare time")
         # Arguments should be a dict at this point
         model_output = self.model(prepared_batch)
-        report = Report(prepared_batch, model_output)
+        if not LXMERT_AUG:
+            report = Report(BS, model_output)
+        else:
+            report = Report2(prepared_batch, model_output)
+
         self.profile("Forward time")
 
         return report
@@ -381,7 +363,10 @@ class BaseTrainer:
             # Add metrics to meter only when mode is `eval`
             meter_update_dict = {}
             if not eval_mode:
-                loss_key = report.dataset_type + "/total_loss"
+                if not LXMERT_AUG:
+                    loss_key = report.dataset_type + "/total_loss"
+                else:
+                    loss_key = "vqa2/total_loss"
                 reduced_loss = sum([loss.mean() for loss in reduced_loss_dict.values()])
                 if hasattr(reduced_loss, "item"):
                     reduced_loss = reduced_loss.item()
@@ -391,7 +376,7 @@ class BaseTrainer:
                 meter_update_dict.update(reduced_loss_dict)
             if hasattr(report, "metrics"):
                 meter_update_dict.update(reduced_metrics_dict)
-            meter.update(meter_update_dict, report.batch_size)
+            meter.update(meter_update_dict, report.batch_size if not LXMERT_AUG else BS)
 
     def _logistics(self, report):
         registry.register("current_iteration", self.current_iteration)
@@ -423,7 +408,7 @@ class BaseTrainer:
                     ),
                     "time": self.train_timer.get_time_since_start(),
                     "time_since_start": self.total_timer.get_time_since_start(),
-                    "eta": self._calculate_time_left(),
+                    "eta": self._calculate_time_left() if not LXMERT_AUG else "?",
                 }
             )
 

@@ -30,17 +30,8 @@ from mmf.utils.lxmert_data import LXMERTDatasetLoader, Report2
 
 LXMERT_AUG = True
 TINY = True
-DATASET_NAME = "pretrain"
-TRAIN_NAME = "train"
-# VALID_NAME = "valid"
-# WORKERS = 4
-# PIN = True
 BS = 64
-# BS_VAL = 512
-# SHUFFLE= True
-# SPLITS_VAL = "mscoco_minival"
-# DROP_LAST = True
-# QA_SETS = "vqa,gqa,visual7w"
+QA_SETS = "vqa,gqa,visual7w"
 
 if TINY:
     SPLITS_TRAIN = "mscoco_minival"
@@ -120,9 +111,12 @@ class BaseTrainer:
             self.test_dataset = self.dataset_loader.test_dataset
             self.val_loader = self.dataset_loader.val_loader
             self.test_loader = self.dataset_loader.test_loader
+        else:
+            self.val_dataset = self.dataset_loader.val_dataset
+            self.val_loader = self.dataset_loader.val_loader
 
         # Total iterations for snapshot
-        self.snapshot_iterations = len(self.train_dataset)
+        self.snapshot_iterations = len(self.val_dataset)
         self.snapshot_iterations //= self.config.training.batch_size
         self.train_loader = self.dataset_loader.train_loader
 
@@ -196,7 +190,10 @@ class BaseTrainer:
         self.checkpoint_interval = self.training_config.checkpoint_interval
         self.max_updates = self.training_config.max_updates
         self.should_clip_gradients = self.training_config.clip_gradients
-        self.max_epochs = self.training_config.max_epochs
+        if not LXMERT_AUG:
+            self.max_epochs = self.training_config.max_epochs
+        else:
+            self.max_epochs = 20
 
         self.early_stopping = EarlyStopping(
             self.model,
@@ -239,9 +236,9 @@ class BaseTrainer:
 
     def train(self):
         self.writer.write("===== Model =====")
-        self.writer.write(self.model)
-
-        print_model_parameters(self.model)
+            self.writer.write(self.model)
+        if not lxmert_data:
+            print_model_parameters(self.model)
 
         if "train" not in self.run_type:
             self.inference()
@@ -250,7 +247,10 @@ class BaseTrainer:
         should_break = False
 
         if self.max_epochs is None:
-            self.max_epochs = math.inf
+            if not LXMERT_AUG:
+                self.max_epochs = math.inf
+            else:
+                self.max_epochs = 20
         else:
             self.max_updates = math.inf
 

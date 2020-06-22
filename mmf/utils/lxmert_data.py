@@ -27,6 +27,7 @@ from mmf.common.sample import SampleList, Sample
 
 TINY_IMG_NUM = 500
 FAST_IMG_NUM = 5000
+SPLITS_VAL = "mscoco_minival"
 
 Split2ImgFeatPath = {
     'mscoco_train': '/playpen2/lxmert_data/data/mscoco_imgfeat/train2014_obj36.tsv',
@@ -65,7 +66,8 @@ class Report2(OrderedDict):
                     warnings.warn(log)
 
                 if type(item) == torch.Tensor:
-                    item = torch.cat((self[key], report[key]), dim=0)
+                    continue
+                    #item = torch.cat((self[key], report[key]), dim=0)
                 self[key] = item
 
     def __setattr__(self, key, value):
@@ -548,13 +550,23 @@ class LXMERTDatasetLoader:
             self.config)
 
         self.train_dataset = dataset_instance
-
         loader_instance = build_dataloader_and_sampler(dataset_instance,
             self.num_workers,self.pin_memory,self.bs,self.shuffle, self.drop_last)
+        ### val instance
+        vset = LXMERTDataset(SPLITS_VAL, qa_sets=self.qa_sets)
+        val_instance = LXMERTTorchDataset(dset,
+            "pretrain",
+            "valid",
+            5000,
+            self.config)
+        self.val_dataset = val_instance
 
-        # seed sampler used to be here
+        val_loader  = build_dataloader_and_sampler(dataset_instance,
+            self.num_workers,self.pin_memory,self.bs,self.shuffle, self.drop_last)
+
 
         self.train_loader = loader_instance
+        self.val_loader = val_loader
 
     @property
     def dataset_config(self):

@@ -29,7 +29,7 @@ from mmf.utils.timer import Timer
 from mmf.utils.lxmert_data import LXMERTDatasetLoader, Report2
 
 LXMERT_AUG = True
-TINY = True
+TINY = False
 BS = 64
 QA_SETS = "vqa,gqa,visual7w"
 
@@ -179,7 +179,6 @@ class BaseTrainer:
         self.meter = Meter()
 
         self.training_config = self.config.training
-
         early_stop_criteria = self.training_config.early_stop.criteria
         early_stop_minimize = self.training_config.early_stop.minimize
         early_stop_enabled = self.training_config.early_stop.enabled
@@ -236,8 +235,8 @@ class BaseTrainer:
 
     def train(self):
         self.writer.write("===== Model =====")
-            self.writer.write(self.model)
-        if not lxmert_data:
+        self.writer.write(self.model)
+        if not LXMERT_AUG:
             print_model_parameters(self.model)
 
         if "train" not in self.run_type:
@@ -450,10 +449,16 @@ class BaseTrainer:
                 "val_time": self.snapshot_timer.get_time_since_start(),
             }
 
-            stop = self.early_stopping(self.num_updates, self.current_iteration, meter)
-            stop = bool(broadcast_scalar(stop, src=0, device=self.device))
+            if not LXMERT_AUG:
+                stop = self.early_stopping(self.num_updates, self.current_iteration, meter)
+                stop = bool(broadcast_scalar(stop, src=0, device=self.device))
 
-            extra.update(self.early_stopping.get_info())
+                extra.update(self.early_stopping.get_info())
+            else:
+                if self.current_epoch == 20:
+                    stop = True
+                else:
+                    stop = False
 
             self._summarize_report(meter, extra=extra)
             gc.collect()
@@ -485,17 +490,20 @@ class BaseTrainer:
                 if combined_report is None:
                     combined_report = report
                 else:
-                    combined_report.accumulate_tensor_fields(
+                    if not LXMERT_AUG:
+                        combined_report.accumulate_tensor_fields(
                         report, self.metrics.required_params
-                    )
-                    combined_report.batch_size += report.batch_size
+                        )
+                        combined_report.batch_size += report.batch_size
+                    else:
+                        combined_report = report
 
                 if single_batch is True:
                     break
 
-            combined_report.metrics = self.metrics(combined_report, combined_report)
-            self._update_meter(combined_report, meter, eval_mode=True)
-
+            if not LXMERT_AUG:
+                combined_report.metrics = self.metrics(combined_report, combined_report)
+                self._update_meter(combined_report, meter, eval_mode=True)
             self.model.train()
 
         return combined_report, meter
@@ -532,11 +540,18 @@ class BaseTrainer:
 
         self.writer.write(f"Starting inference on {dataset_type} set")
 
-        report, meter = self.evaluate(
-            getattr(self, f"{dataset_type}_loader"), use_tqdm=True
-        )
-        prefix = f"{report.dataset_name}: full {dataset_type}"
-        self._summarize_report(meter, prefix)
+        if not LXMERT_AUG:
+            report, meter = self.evaluate(
+                getattr(self, f"{dataset_type}_loader"), use_tqdm=True
+            )
+        else:
+            report, meter = self.evaluate(
+                getattr(self, f"val_loader"))
+        if not LXMERT_AUG:
+            prefix = f"{report.dataset_name}: full {dataset_type}"
+            self._summarize_report(meter, prefix)
+        else:
+            pass
 
     def _calculate_time_left(self):
         time_taken_for_log = time.time() * 1000 - self.train_timer.start

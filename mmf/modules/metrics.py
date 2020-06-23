@@ -152,6 +152,7 @@ class BaseMetric:
             model_output (Dict): Output dict from the model for the current
                                  SampleList
 
+
         Returns:
             torch.Tensor|float: Value of the metric.
 

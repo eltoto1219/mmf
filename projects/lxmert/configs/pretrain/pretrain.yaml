@@ -1,0 +1,5 @@
+includes:
+- ../masked_vqa2/masked.yaml
+- ../visual_genome/masked.yaml
+- ../coco/masked.yaml
+- ../gqa/masked.yaml

@@ -1,10 +1,6 @@
 model_config:
   lxmert:
     training_head_type: pretraining
-    task_matched: true
-    task_mask_lm: true
-    task_obj_predict: true
-    num_labels: 3129
 
 dataset_config:
   masked_vqa2:
@@ -14,12 +10,13 @@ dataset_config:
     features:
       train:
       - coco/defaults/features/trainval2014.lmdb
+      - coco/defaults/features/trainval2014.lmdb
     annotations:
       train:
       - vqa2/defaults/annotations/imdb_train2014.npy
       - vqa2/defaults/annotations/imdb_val2014.npy
-    return_features_info: true
-    use_image_feature_masks: true
+    return_features_info: false
+    use_image_feature_masks: false
     processors:
         masked_token_processor:
             type: masked_token
@@ -47,6 +44,10 @@ dataset_config:
                 preprocessor:
                   type: simple_word
                   params: {}
+    vqa2:
+        processors: {}
+
+        features: {}
 
 optimizer:
   type: adam_w
